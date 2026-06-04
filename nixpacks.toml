@@ -1,0 +1,11 @@
+[phases.setup]
+nodejs = "20"
+
+[phases.install]
+run = "npm install"
+
+[phases.build]
+run = "npm run build"
+
+[phases.start]
+run = "npm start"

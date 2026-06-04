@@ -3,6 +3,7 @@ const http = require('http');
 const socketio = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
+dotenv.config();
 const connectDB = require('./config/db');
 const socketHandler = require('./sockets/socketHandler');
 const errorHandler = require('./middleware/errorMiddleware');
@@ -72,12 +73,10 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 // Health Check Endpoint
-app.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.status(200).json({
-    success: true,
-    status: 'Operational',
-    timestamp: new Date(),
-    environment: process.env.NODE_ENV || 'development'
+    status: 'ok',
+    timestamp: Date.now()
   });
 });
 
