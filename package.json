@@ -21,9 +21,9 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-mongo-sanitize": "^2.2.0",
     "express-validator": "^7.0.1",
     "firebase-admin": "^12.1.0",
-    "google-maps-services-js": "^3.3.27",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.3.1",
@@ -32,7 +32,8 @@
     "redis": "^4.6.13",
     "socket.io": "^4.7.5",
     "twilio": "^5.2.0",
-    "razorpay": "^2.9.2"
+    "razorpay": "^2.9.2",
+    "xss-clean": "^0.1.4"
   },
   "devDependencies": {
     "jest": "^29.7.0",
