@@ -1,77 +1,90 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 
-const UserSchema = new mongoose.Schema({
-  phone: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-  },
-  name: {
-    type: String,
-    trim: true,
-    default: '',
-  },
-  email: {
-    type: String,
-    trim: true,
-    lowercase: true,
-    default: '',
-  },
-  avatar: {
-    type: String,
-    default: '',
-  },
-  city: {
-    type: String,
-    enum: ['Delhi','Mumbai','Bangalore','Hyderabad','Chennai','Pune','Kolkata','Ahmedabad','Jaipur','Gurugram'],
-    required: true,
-    default: 'Delhi'
-  },
-  otp: {
-    type: String,
-    default: null,
-  },
-  otpExpiry: {
-    type: Date,
-    default: null,
-  },
-  fcmToken: {
-    type: String,
-    default: null,
-  },
-  // GeoJSON field for last known coordinates
-  location: {
-    type: {
+const userSchema = new mongoose.Schema(
+  {
+    name: {
       type: String,
-      enum: ['Point'],
-      default: 'Point',
+      required: [true, 'Please provide a name'],
+      trim: true,
     },
-    coordinates: {
-      type: [Number], // [longitude, latitude]
-      default: [0, 0],
+    email: {
+      type: String,
+      required: [true, 'Please provide an email'],
+      unique: true,
+      lowercase: true,
+      match: [/^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/, 'Please provide a valid email'],
+    },
+    password: {
+      type: String,
+      required: [true, 'Please provide a password'],
+      minlength: 6,
+      select: false,
+    },
+    phone: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+    profilePicture: {
+      type: String,
+      default: null,
+    },
+    address: {
+      street: String,
+      city: String,
+      state: String,
+      zipCode: String,
+      country: String,
+    },
+    location: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point',
+      },
+      coordinates: {
+        type: [Number],
+        default: [0, 0],
+      },
+    },
+    role: {
+      type: String,
+      enum: ['user', 'mechanic', 'admin'],
+      default: 'user',
+    },
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
+    verificationToken: String,
+    verificationExpires: Date,
+    resetPasswordToken: String,
+    resetPasswordExpires: Date,
+    createdAt: {
+      type: Date,
+      default: Date.now,
     },
   },
-  activeRequestId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ServiceRequest',
-    default: null,
-  },
-  emergencyContacts: [
-    {
-      name: { type: String, required: true },
-      phone: { type: String, required: true }
-    }
-  ],
-  isBlocked: {
-    type: Boolean,
-    default: false,
+  { timestamps: true }
+);
+
+userSchema.pre('save', async function (next) {
+  if (!this.isModified('password')) return next();
+
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error);
   }
-}, {
-  timestamps: true
 });
 
-// Create spatial index for 2D sphere queries
-UserSchema.index({ location: '2dsphere' });
+userSchema.methods.matchPassword = async function (enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
+};
 
-module.exports = mongoose.model('User', UserSchema);
+userSchema.index({ location: '2dsphere' });
+
+module.exports = mongoose.model('User', userSchema);

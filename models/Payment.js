@@ -1,49 +1,52 @@
 const mongoose = require('mongoose');
 
-const PaymentSchema = new mongoose.Schema({
-  serviceRequest: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ServiceRequest',
-    required: true,
+const paymentSchema = new mongoose.Schema(
+  {
+    requestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Request',
+      required: true,
+    },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    mechanicId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Mechanic',
+    },
+    amount: {
+      type: Number,
+      required: true,
+    },
+    paymentMethod: {
+      type: String,
+      enum: ['card', 'upi', 'wallet', 'cash', 'razorpay'],
+      default: 'razorpay',
+    },
+    transactionId: String,
+    status: {
+      type: String,
+      enum: ['pending', 'completed', 'failed', 'refunded'],
+      default: 'pending',
+    },
+    razorpayOrderId: String,
+    razorpayPaymentId: String,
+    razorpaySignature: String,
+    refundDetails: {
+      refundId: String,
+      refundAmount: Number,
+      refundReason: String,
+      refundedAt: Date,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+    completedAt: Date,
   },
-  customer: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-  },
-  mechanic: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Mechanic',
-    required: true,
-  },
-  amount: {
-    type: Number,
-    required: true,
-  },
-  currency: {
-    type: String,
-    default: 'INR',
-  },
-  paymentStatus: {
-    type: String,
-    enum: ['pending', 'success', 'failed'],
-    default: 'pending',
-  },
-  paymentMethod: {
-    type: String,
-    enum: ['cash', 'upi', 'card'],
-    required: true,
-  },
-  transactionId: {
-    type: String,
-    default: '',
-  },
-  gatewayResponse: {
-    type: mongoose.Schema.Types.Mixed,
-    default: {},
-  }
-}, {
-  timestamps: true
-});
+  { timestamps: true }
+);
 
-module.exports = mongoose.model('Payment', PaymentSchema);
+module.exports = mongoose.model('Payment', paymentSchema);

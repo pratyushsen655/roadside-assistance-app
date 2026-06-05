@@ -1,19 +1,64 @@
 const express = require('express');
+const authMiddleware = require('../middleware/authMiddleware');
+
 const router = express.Router();
-const { protect, restrictTo } = require('../middleware/authMiddleware');
-const {
-  getProfile,
-  updateProfile,
-  updateEmergencyContacts,
-  triggerSOS
-} = require('../controllers/userController');
 
-// All routes here require verification
-router.use(protect);
+router.get('/profile', authMiddleware, async (req, res) => {
+  try {
+    const User = require('../models/User');
+    const user = await User.findById(req.user.id);
 
-router.get('/profile', restrictTo('customer', 'admin'), getProfile);
-router.put('/profile', restrictTo('customer'), updateProfile);
-router.put('/emergency-contacts', restrictTo('customer'), updateEmergencyContacts);
-router.post('/sos', restrictTo('customer'), triggerSOS);
+    res.status(200).json({
+      success: true,
+      user,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+router.put('/profile', authMiddleware, async (req, res) => {
+  try {
+    const User = require('../models/User');
+    const { name, phone, address } = req.body;
+
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { name, phone, address },
+      { new: true, runValidators: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      user,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+router.get('/requests', authMiddleware, async (req, res) => {
+  try {
+    const Request = require('../models/Request');
+    const requests = await Request.find({ userId: req.user.id }).populate('mechanicId');
+
+    res.status(200).json({
+      success: true,
+      requests,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
 
 module.exports = router;

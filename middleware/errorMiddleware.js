@@ -1,40 +1,13 @@
-/**
- * Global Error Handler Middleware
- */
 const errorHandler = (err, req, res, next) => {
-  let error = { ...err };
-  error.message = err.message;
+  const { statusCode = 500, message } = err;
 
-  // Log for developers
-  if (process.env.NODE_ENV !== 'test') {
-    console.error(`[Express Error Block] Path: ${req.path}`, err);
-  }
+  console.error(`[Error] ${message}`);
 
-  // Mongoose Bad ObjectId
-  if (err.name === 'CastError') {
-    const message = `Resource not found with id of ${err.value}`;
-    error = { message, statusCode: 404 };
-  }
-
-  // Mongoose Duplicate Key
-  if (err.code === 11000) {
-    const message = 'Duplicate field value entered. Unique constraint failed.';
-    error = { message, statusCode: 400 };
-  }
-
-  // Mongoose Validation Error
-  if (err.name === 'ValidationError') {
-    const message = Object.values(err.errors).map(val => val.message).join(', ');
-    error = { message, statusCode: 400 };
-  }
-
-  const response = {
+  res.status(statusCode).json({
     success: false,
-    message: error.message || 'Server Error',
-    errors: error.errors || [],
-    statusCode: error.statusCode || 500
-  };
-  res.status(response.statusCode).json(response);
+    message: message || 'Internal Server Error',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+  });
 };
 
 module.exports = errorHandler;

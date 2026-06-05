@@ -1,120 +1,92 @@
 const mongoose = require('mongoose');
 
-const MechanicSchema = new mongoose.Schema({
-  phone: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-  },
-  name: {
-    type: String,
-    required: true,
-    trim: true,
-  },
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-    lowercase: true,
-  },
-  avatar: {
-    type: String,
-    default: '',
-  },
-  vehicleSpecializations: {
-    type: [String],
-    enum: ['car', 'bike'],
-    default: ['car', 'bike'],
-  },
-  kyc: {
-    docType: {
-      type: String,
-      enum: ['driver_license', 'national_id', 'business_permit'],
-      default: 'driver_license'
+const mechanicSchema = new mongoose.Schema(
+  {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      unique: true,
     },
-    docUrl: {
+    licenseNumber: {
       type: String,
-      default: ''
+      required: true,
+      unique: true,
     },
-    status: {
+    licenseExpiry: Date,
+    certifications: [String],
+    experience: {
+      type: Number,
+      required: true,
+    },
+    specializations: [String],
+    serviceRadius: {
+      type: Number,
+      default: 10,
+    },
+    availabilityStatus: {
       type: String,
-      enum: ['pending', 'approved', 'rejected'],
-      default: 'pending'
+      enum: ['available', 'busy', 'offline'],
+      default: 'offline',
     },
-    rejectionReason: {
-      type: String,
-      default: ''
-    }
-  },
-  status: {
-    type: String,
-    enum: ['online', 'offline', 'busy'],
-    default: 'offline',
-  },
-  socketId: {
-    type: String,
-    default: null,
-  },
-  fcmToken: {
-    type: String,
-    default: null,
-  },
-  // GeoJSON coordinate
-  location: {
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point',
+    currentLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point',
+      },
+      coordinates: {
+        type: [Number],
+        default: [0, 0],
+      },
     },
-    coordinates: {
-      type: [Number], // [longitude, latitude]
-      default: [0, 0],
+    rating: {
+      average: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 5,
+      },
+      totalReviews: {
+        type: Number,
+        default: 0,
+      },
     },
-  },
-  activeRequestId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ServiceRequest',
-    default: null,
-  },
-  averageRating: {
-    type: Number,
-    default: 5.0,
-    min: 1.0,
-    max: 5.0,
-  },
-  ratingsCount: {
-    type: Number,
-    default: 0,
-  },
-  earnings: {
-    total: {
+    completedRequests: {
       type: Number,
       default: 0,
     },
-    withdrawn: {
+    hourlyRate: {
       type: Number,
-      default: 0,
-    }
+      required: true,
+    },
+    bankDetails: {
+      accountHolder: String,
+      accountNumber: String,
+      ifscCode: String,
+      bankName: String,
+    },
+    documents: {
+      licenseImage: String,
+      certificationImages: [String],
+      identityProof: String,
+    },
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
   },
-  otp: {
-    type: String,
-    default: null,
-  },
-  otpExpiry: {
-    type: Date,
-    default: null,
-  },
-  isBlocked: {
-    type: Boolean,
-    default: false,
-  }
-}, {
-  timestamps: true
-});
+  { timestamps: true }
+);
 
-// Create spatial index for tracking nearby mechanics
-MechanicSchema.index({ location: '2dsphere' });
+mechanicSchema.index({ currentLocation: '2dsphere' });
 
-module.exports = mongoose.model('Mechanic', MechanicSchema);
+module.exports = mongoose.model('Mechanic', mechanicSchema);
