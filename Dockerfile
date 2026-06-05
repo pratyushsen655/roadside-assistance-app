@@ -2,10 +2,10 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 # Install dependencies based on package-lock for reproducibility
-COPY backend/package*.json ./
-RUN npm ci --omit=dev
+COPY package*.json ./
+RUN npm install --omit=dev
 # Copy source code
-COPY backend/. ./
+COPY . ./
 # Production stage
 FROM node:20-alpine
 WORKDIR /app
