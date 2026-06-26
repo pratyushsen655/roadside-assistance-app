@@ -1,6 +1,5 @@
 const admin = require('firebase-admin');
-const dotenv = require('dotenv');
-dotenv.config();
+// dotenv already loaded by entry point (server.js)
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
@@ -10,9 +9,7 @@ let firebaseInitialized = false;
 
 if (projectId && clientEmail && privateKey) {
   try {
-    // Process private key linebreaks
     const formattedPrivateKey = privateKey.replace(/\\n/g, '\n');
-
     admin.initializeApp({
       credential: admin.credential.cert({
         projectId,
@@ -21,12 +18,14 @@ if (projectId && clientEmail && privateKey) {
       }),
     });
     firebaseInitialized = true;
-    console.log('[FCM Service] Firebase Admin SDK initialized successfully.');
+    if (process.env.NODE_ENV !== 'production') {
+      process.stdout.write('[FCM Service] Firebase Admin SDK initialized.\n');
+    }
   } catch (error) {
-    console.warn('[FCM Service] Failed to initialize Firebase Admin SDK:', error.message);
+    process.stderr.write(`[FCM Service] Firebase init error: ${error.message}\n`);
   }
-} else {
-  console.log('[FCM Service] Firebase credentials missing. Running in mock mode.');
+} else if (process.env.NODE_ENV !== 'production') {
+  process.stdout.write('[FCM Service] Firebase credentials missing — running in mock mode.\n');
 }
 
 /**
@@ -40,6 +39,7 @@ const sendPushNotification = async (token, title, body, data = {}) => {
   if (!token) return false;
 
   // Cast all data properties to string (Firebase requirement)
+  /** @type {{ [key: string]: string }} */
   const stringifiedData = {};
   Object.keys(data).forEach(key => {
     stringifiedData[key] = String(data[key]);
@@ -50,23 +50,22 @@ const sendPushNotification = async (token, title, body, data = {}) => {
       const message = {
         notification: { title, body },
         data: stringifiedData,
-        token: token,
+        token,
       };
       const response = await admin.messaging().send(message);
-      console.log(`[FCM Service] Push Notification successfully sent: ${response}`);
+      if (process.env.NODE_ENV !== 'production') {
+        process.stdout.write(`[FCM] Push sent: ${response}\n`);
+      }
       return true;
     } catch (error) {
-      console.error('[FCM Service] Firebase sending error:', error.message);
+      process.stderr.write(`[FCM Service] Send error: ${error.message}\n`);
     }
   }
 
-  // Fallback Mock Logger
-  console.log('\n==================================================');
-  console.log(`[MOCK FCM SERVICE] Push Sent to token: ${token}`);
-  console.log(`[MOCK FCM SERVICE] Title: ${title}`);
-  console.log(`[MOCK FCM SERVICE] Body: ${body}`);
-  console.log('[MOCK FCM SERVICE] Data:', stringifiedData);
-  console.log('==================================================\n');
+  // Development mock fallback
+  if (process.env.NODE_ENV !== 'production') {
+    process.stdout.write(`[MOCK FCM] → ${token} | ${title} | ${body}\n`);
+  }
   return true;
 };
 
@@ -81,6 +80,7 @@ const sendMulticastNotification = async (tokens, title, body, data = {}) => {
   const validTokens = tokens.filter(t => !!t);
   if (!validTokens || validTokens.length === 0) return false;
 
+  /** @type {{ [key: string]: string }} */
   const stringifiedData = {};
   Object.keys(data).forEach(key => {
     stringifiedData[key] = String(data[key]);
@@ -93,19 +93,18 @@ const sendMulticastNotification = async (tokens, title, body, data = {}) => {
         notification: { title, body },
         data: stringifiedData,
       });
-      console.log(`[FCM Service] Multicast sent. Success count: ${response.successCount}, Failure count: ${response.failureCount}`);
+      if (process.env.NODE_ENV !== 'production') {
+        process.stdout.write(`[FCM] Multicast: ${response.successCount} ok, ${response.failureCount} failed\n`);
+      }
       return true;
     } catch (error) {
-      console.error('[FCM Service] Multicast error:', error.message);
+      process.stderr.write(`[FCM Service] Multicast error: ${error.message}\n`);
     }
   }
 
-  console.log('\n==================================================');
-  console.log(`[MOCK FCM SERVICE] Multicast Sent to ${validTokens.length} devices.`);
-  console.log(`[MOCK FCM SERVICE] Title: ${title}`);
-  console.log(`[MOCK FCM SERVICE] Body: ${body}`);
-  console.log('[MOCK FCM SERVICE] Data:', stringifiedData);
-  console.log('==================================================\n');
+  if (process.env.NODE_ENV !== 'production') {
+    process.stdout.write(`[MOCK FCM] Multicast → ${validTokens.length} devices | ${title}\n`);
+  }
   return true;
 };
 

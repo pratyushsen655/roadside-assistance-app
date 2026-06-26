@@ -14,7 +14,7 @@ const { calculateHaversineDistance } = require('./mapService');
  * @param {number} maxRadiusKm - Search boundary (default 10km)
  * @returns {Promise<Array<{mechanic: object, score: number, distanceKm: number}>>}
  */
-const findOptimalMechanics = async (serviceRequest, maxRadiusKm = 10) => {
+const findOptimalMechanics = async (serviceRequest, maxRadiusKm = 4) => {
   const [custLon, custLat] = serviceRequest.customerLocation.coordinates;
   const vehicleType = serviceRequest.vehicleType; // 'car' or 'bike'
 

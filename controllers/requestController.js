@@ -106,8 +106,8 @@ exports.createRequest = async (req, res, next) => {
 
     // 4. Trigger Real-time broadcasts if booking is INSTANT
     if (serviceRequest.bookingType === 'instant') {
-      // Find matches using AI scoring service
-      const optimalMatches = await aiService.findOptimalMechanics(serviceRequest, 10);
+      // Find matches using AI scoring service — hard 4 km radius (same as feed endpoint)
+      const optimalMatches = await aiService.findOptimalMechanics(serviceRequest, 4);
       
       // Get all fcmTokens and socketIds of mechanics
       const mechanicTokens = [];
@@ -185,6 +185,12 @@ exports.getActiveRequest = async (req, res, next) => {
       return res.status(200).json({ success: true, data: null, message: 'No active requests found.' });
     }
 
+    // Safeguard: Ensure startOTP is generated and saved if missing
+    if (!request.startOTP) {
+      request.startOTP = Math.floor(1000 + Math.random() * 9000).toString();
+      await request.save();
+    }
+
     res.status(200).json({ success: true, data: request });
   } catch (error) {
     next(error);
@@ -250,7 +256,7 @@ exports.acceptRequest = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Request is no longer available. Already accepted by another mechanic.' });
     }
 
-    const mechanic = await Mechanic.findById(mechanicId);
+    const mechanic = await Mechanic.findById(mechanicId).populate('userId');
     if (mechanic.activeRequestId) {
       return res.status(400).json({ success: false, message: 'You already have another active request in progress.' });
     }
@@ -292,6 +298,8 @@ exports.acceptRequest = async (req, res, next) => {
     await customer.save();
 
     // 6. Broadcast via Sockets to customer
+    const mechanicUser = /** @type {any} */(mechanic.userId);
+
     socketHandler.sendToCustomer(request.customer.toString(), 'request_accepted', {
       requestId,
       pricing: request.pricing,
@@ -299,9 +307,9 @@ exports.acceptRequest = async (req, res, next) => {
       distanceKm: route.distanceKm,
       mechanic: {
         _id: mechanic._id,
-        name: mechanic.name,
-        phone: mechanic.phone,
-        avatar: mechanic.avatar,
+        name: mechanicUser.name,
+        phone: mechanicUser.phone,
+        avatar: mechanicUser.avatar,
         averageRating: mechanic.averageRating
       }
     });
@@ -314,14 +322,14 @@ exports.acceptRequest = async (req, res, next) => {
       await fcmService.sendPushNotification(
         customer.fcmToken,
         'Mechanic Assigned!',
-        `${mechanic.name} is on the way to help you.`
+        `${mechanicUser.name} is on the way to help you.`
       );
     }
 
     // Notify Admin Panel
     socketHandler.sendToAdmins('admin_request_accepted', {
       requestId,
-      mechanicName: mechanic.name,
+      mechanicName: mechanicUser.name,
       mechanicId
     });
 
@@ -452,7 +460,15 @@ exports.updateRequestStatus = async (req, res, next) => {
       const commissionSplit = 0.80;
       const creditAmount = Math.round(request.pricing.totalAmount * commissionSplit);
       
-      mechanic.earnings.total += creditAmount;
+      const earnings = /** @type {any} */(mechanic.earnings);
+      if (typeof earnings === 'number') {
+        mechanic.earnings = earnings + creditAmount;
+      } else if (earnings && typeof earnings.total === 'number') {
+        earnings.total += creditAmount;
+        mechanic.earnings = earnings;
+      } else {
+        mechanic.earnings = creditAmount;
+      }
       mechanic.status = 'online'; // Return to online availability pool
       mechanic.activeRequestId = null;
       await mechanic.save();

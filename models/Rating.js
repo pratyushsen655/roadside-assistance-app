@@ -1,44 +1,14 @@
 const mongoose = require('mongoose');
 
 const RatingSchema = new mongoose.Schema({
-  serviceRequest: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ServiceRequest',
-    required: true,
-  },
-  from: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    refPath: 'fromModel',
-  },
-  fromModel: {
-    type: String,
-    required: true,
-    enum: ['User', 'Mechanic'],
-  },
-  to: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    refPath: 'toModel',
-  },
-  toModel: {
-    type: String,
-    required: true,
-    enum: ['User', 'Mechanic'],
-  },
-  rating: {
-    type: Number,
-    required: true,
-    min: 1,
-    max: 5,
-  },
-  review: {
-    type: String,
-    trim: true,
-    default: '',
-  }
-}, {
-  timestamps: true
+  jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceRequest', required: true, unique: true },
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  mechanicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Mechanic', required: true },
+  rating: { type: Number, required: true, min: 1, max: 5 },
+  review: { type: String, maxlength: 500 },
+  tags: [{ type: String, enum: ['Professional', 'Fast', 'Affordable', 'Skilled', 'Friendly', 'On Time'] }],
+  mechanicReply: { type: String, maxlength: 300 },
+  createdAt: { type: Date, default: Date.now }
 });
 
 module.exports = mongoose.model('Rating', RatingSchema);

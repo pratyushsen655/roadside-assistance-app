@@ -5,19 +5,21 @@ const userSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      required: [true, 'Please provide a name'],
+      required: false,
       trim: true,
+      default: null,
     },
     email: {
       type: String,
-      required: [true, 'Please provide an email'],
+      required: false,
       unique: true,
+      sparse: true,          // allows multiple null emails
       lowercase: true,
       match: [/^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/, 'Please provide a valid email'],
     },
     password: {
       type: String,
-      required: [true, 'Please provide a password'],
+      required: false,       // optional — OTP users don't have passwords
       minlength: 6,
       select: false,
     },
@@ -29,6 +31,36 @@ const userSchema = new mongoose.Schema(
     profilePicture: {
       type: String,
       default: null,
+    },
+    avatar: {
+      type: String,
+      default: null,
+    },
+    vehicleMake: {
+      type: String,
+      default: null,
+    },
+    vehicleModel: {
+      type: String,
+      default: null,
+    },
+    vehicleYear: {
+      type: String,
+      default: null,
+    },
+    referralCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+    referredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    referralEarnings: {
+      type: Number,
+      default: 0,
     },
     address: {
       street: String,
@@ -57,10 +89,33 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    emergencyContacts: [
+      {
+        name: String,
+        phone: String,
+      }
+    ],
+    activeRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ServiceRequest',
+      default: null,
+    },
+    fcmToken: {
+      type: String,
+      default: null,
+    },
+    pushToken: {
+      type: String,
+      default: null,
+    },
     verificationToken: String,
     verificationExpires: Date,
     resetPasswordToken: String,
     resetPasswordExpires: Date,
+    isBlocked: {
+      type: Boolean,
+      default: false,
+    },
     createdAt: {
       type: Date,
       default: Date.now,
@@ -70,6 +125,16 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.pre('save', async function (next) {
+  // Auto-generate referral code for new users
+  if (this.isNew && !this.referralCode) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 8; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    this.referralCode = code;
+  }
+
   if (!this.isModified('password')) return next();
 
   try {

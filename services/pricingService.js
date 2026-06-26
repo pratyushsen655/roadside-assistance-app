@@ -11,6 +11,18 @@ const PRICING_CONFIG = {
   bike: {
     baseFare: 150,
     ratePerKm: 15,
+  },
+  auto: {
+    baseFare: 200,
+    ratePerKm: 20,
+  },
+  'e-vehicle': {
+    baseFare: 180,
+    ratePerKm: 18,
+  },
+  other: {
+    baseFare: 250,
+    ratePerKm: 25,
   }
 };
 

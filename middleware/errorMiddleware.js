@@ -1,11 +1,14 @@
-const errorHandler = (err, req, res, next) => {
-  const { statusCode = 500, message } = err;
+const errorHandler = (err, req, res, _next) => {
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Internal Server Error';
 
-  console.error(`[Error] ${message}`);
+  process.stderr.write(`[Error] ${req.method} ${req.originalUrl} | ${statusCode} | ${message}\n`);
 
   res.status(statusCode).json({
     success: false,
-    message: message || 'Internal Server Error',
+    message,
+    errors: err.errors || [],
+    statusCode,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 };

@@ -37,7 +37,7 @@ async function createCustomers() {
   ];
 
   const created = await User.insertMany(
-    customers.map(c => ({ ...c, role: 'customer', location: { type: 'Point', coordinates: randomCoord(28.6139, 77.2090) } }))
+    customers.map(c => ({ ...c, role: 'user', location: { type: 'Point', coordinates: randomCoord(28.6139, 77.2090) } }))
   );
   console.log('👥 Created customers:', created.map(u => u._id));
   return created;
@@ -99,11 +99,9 @@ async function createRatings(requests) {
   const ratings = [];
   for (const req of requests) {
     const rating = new Rating({
-      serviceRequest: req._id,
-      from: req.customer,
-      fromModel: 'User',
-      to: req.mechanic,
-      toModel: 'Mechanic',
+      jobId: req._id,
+      customerId: req.customer,
+      mechanicId: req.mechanic,
       rating: 5,
       review: 'Excellent service, quick response!',
     });

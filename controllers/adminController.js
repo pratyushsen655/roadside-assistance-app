@@ -3,6 +3,7 @@ const Mechanic = require('../models/Mechanic');
 const ServiceRequest = require('../models/ServiceRequest');
 const Payment = require('../models/Payment');
 const socketHandler = require('../sockets/socketHandler');
+const fcmService = require('../services/fcmService');
 
 // @desc    Get dashboard metrics and counts
 // @route   GET /api/admin/analytics

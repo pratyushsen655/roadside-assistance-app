@@ -46,8 +46,8 @@ router.put('/profile', authMiddleware, async (req, res) => {
 
 router.get('/requests', authMiddleware, async (req, res) => {
   try {
-    const Request = require('../models/Request');
-    const requests = await Request.find({ userId: req.user.id }).populate('mechanicId');
+    const ServiceRequest = require('../models/ServiceRequest');
+    const requests = await ServiceRequest.find({ customer: req.user.id }).populate('mechanic');
 
     res.status(200).json({
       success: true,

@@ -1,75 +1,21 @@
 const express = require('express');
 const authMiddleware = require('../middleware/authMiddleware');
+const paymentController = require('../controllers/paymentController');
 
 const router = express.Router();
 
-router.post('/create-order', authMiddleware, async (req, res) => {
-  try {
-    const { amount, requestId } = req.body;
-    const Razorpay = require('razorpay');
+// POST /api/payments/create-order
+router.post('/create-order', authMiddleware, paymentController.createOrder);
+router.post('/create', authMiddleware, paymentController.createOrder);
 
-    const razorpay = new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID,
-      key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
+// POST /api/payments/verify
+router.post('/verify', authMiddleware, paymentController.verifyPayment);
 
-    const options = {
-      amount: amount * 100,
-      currency: 'INR',
-      receipt: requestId,
-    };
+// POST /api/payments/pay-cash
+router.post('/pay-cash', authMiddleware, paymentController.payCash);
 
-    const order = await razorpay.orders.create(options);
-
-    res.status(200).json({
-      success: true,
-      order,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-});
-
-router.post('/verify', authMiddleware, async (req, res) => {
-  try {
-    const { razorpayOrderId, razorpayPaymentId, razorpaySignature, requestId, amount } = req.body;
-    const crypto = require('crypto');
-    const Payment = require('../models/Payment');
-
-    const body = razorpayOrderId + '|' + razorpayPaymentId;
-    const expectedSignature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(body).digest('hex');
-
-    if (expectedSignature !== razorpaySignature) {
-      return res.status(400).json({
-        success: false,
-        message: 'Payment verification failed',
-      });
-    }
-
-    const payment = await Payment.create({
-      requestId,
-      userId: req.user.id,
-      amount,
-      razorpayOrderId,
-      razorpayPaymentId,
-      razorpaySignature,
-      status: 'completed',
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'Payment verified successfully',
-      payment,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-});
+// GET /api/payments/history
+router.post('/history', authMiddleware, paymentController.getHistory); // support both or get
+router.get('/history', authMiddleware, paymentController.getHistory);
 
 module.exports = router;

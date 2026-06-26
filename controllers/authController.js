@@ -1,14 +1,15 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
 const generateToken = (userId, role) => {
   return jwt.sign(
     { id: userId, role },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRY || '7d' }
+    /** @type {string} */ (process.env.JWT_SECRET || 'fallback_secret_change_in_env'),
+    { expiresIn: /** @type {import('jsonwebtoken').SignOptions['expiresIn']} */ (process.env.JWT_EXPIRY || '90d') }
   );
 };
 
-const register = async (req, res) => {
+const register = async (req, res, next) => {
   try {
     const { name, email, password, phone, role } = req.body;
 
@@ -16,16 +17,18 @@ const register = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Please provide all required fields',
+        errors: [],
+        statusCode: 400,
       });
     }
 
-    const User = require('../models/User');
-    
     let user = await User.findOne({ email });
     if (user) {
       return res.status(400).json({
         success: false,
         message: 'User already exists',
+        errors: [],
+        statusCode: 400,
       });
     }
 
@@ -51,39 +54,43 @@ const register = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    next(error);
   }
 };
 
-const login = async (req, res) => {
+const login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const { email, phone, password } = req.body;
+    const identifier = email || phone;
 
-    if (!email || !password) {
+    if (!identifier || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide email and password',
+        message: 'Please provide email/phone and password',
+        errors: [],
+        statusCode: 400,
       });
     }
 
-    const User = require('../models/User');
-    const user = await User.findOne({ email }).select('+password');
+    const query = email ? { email } : { phone };
+    const user = await User.findOne(query).select('+password');
 
     if (!user) {
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
+        errors: [],
+        statusCode: 401,
       });
     }
 
-    const isMatch = await user.matchPassword(password);
+    const isMatch = await /** @type {any} */ (user).matchPassword(password);
     if (!isMatch) {
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
+        errors: [],
+        statusCode: 401,
       });
     }
 
@@ -101,10 +108,7 @@ const login = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    next(error);
   }
 };
 

@@ -1,4 +1,4 @@
-const helmet = require('helmet');
+const helmet = require('helmet').default;
 
 const securityHeaders = helmet({
   contentSecurityPolicy: {
@@ -8,6 +8,7 @@ const securityHeaders = helmet({
       scriptSrc: ["'self'"],
     },
   },
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
   frameguard: { action: 'deny' },
   noSniff: true,
   xssFilter: true,
