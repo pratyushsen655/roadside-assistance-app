@@ -4,7 +4,7 @@ const PDFDocument = require('pdfkit');
 
 const generateInvoice = async (req, res, next) => {
   try {
-    const { jobId } = req.params;
+    const jobId = req.params.jobId || req.params.id;
     const job = await ServiceRequest.findById(jobId)
       .populate('customer', 'name phone')
       .populate('mechanic', 'name phone');
@@ -63,12 +63,15 @@ const generateInvoice = async (req, res, next) => {
     // Amount breakdown
     doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor('#ddd').stroke();
     doc.moveDown(0.5);
-    const serviceCharge = (job.pricing?.totalAmount || job.amount || 328) - 29;
+    
+    const baseFare = job.baseRate || job.pricing?.baseFare || 0;
+    const distanceCharge = job.distanceCharge || 0;
     const platformFee = 29;
-    const total = job.pricing?.totalAmount || job.amount || 328;
+    const total = job.pricing?.totalAmount || job.amount || job.totalPrice || (baseFare + distanceCharge + platformFee);
     
     doc.fontSize(11);
-    doc.text('Service Charge:', 50, doc.y, { continued: true }).text(`\u20B9${serviceCharge}`, { align: 'right' });
+    doc.text('Base Fare:', 50, doc.y, { continued: true }).text(`\u20B9${baseFare}`, { align: 'right' });
+    doc.text('Distance Charge:', 50, doc.y, { continued: true }).text(`\u20B9${distanceCharge}`, { align: 'right' });
     doc.text('Platform Fee:', 50, doc.y, { continued: true }).text(`\u20B9${platformFee}`, { align: 'right' });
     doc.moveTo(50, doc.y + 5).lineTo(550, doc.y + 5).strokeColor('#B34700').stroke();
     doc.moveDown();

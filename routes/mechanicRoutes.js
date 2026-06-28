@@ -152,27 +152,57 @@ router.put('/requests/:id/accept', authMiddleware, async (req, res) => {
     const ServiceRequest = require('../models/ServiceRequest');
     const Mechanic = require('../models/Mechanic');
 
-    const request = await ServiceRequest.findById(req.params.id).populate('customer', 'name phone');
-    if (!request) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
+    const mechanic = await Mechanic.findOne({ $or: [{ _id: req.user.id }, { userId: req.user.id }] });
+    if (!mechanic) {
+      return res.status(404).json({ success: false, message: 'Mechanic profile not found' });
     }
 
-    request.mechanic = /** @type {any} */ (req.user.id);
-    request.status = 'accepted';
+    // Atomic find and update to prevent race conditions
+    const request = await ServiceRequest.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: { $in: ['pending', 'assigned'] },
+        $or: [
+          { currentNotifiedMechanic: mechanic._id },
+          { currentNotifiedMechanic: null }
+        ]
+      },
+      {
+        $set: {
+          mechanic: mechanic._id,
+          status: 'accepted',
+          accepted_mechanic_id: mechanic._id
+        }
+      },
+      { new: true }
+    ).populate('customer', 'name phone');
+
+    if (!request) {
+      return res.status(400).json({ success: false, message: 'Request is no longer available. Already accepted by another mechanic or expired.' });
+    }
+
     if (!request.pricing || request.pricing.totalAmount === 0) {
       request.pricing = { baseFare: 150, totalAmount: 350 };
       request.amount = 350;
       request.current_price = 350;
     }
     request.accepted_price = request.current_price || request.amount || (request.pricing ? request.pricing.totalAmount : 350);
-    request.accepted_mechanic_id = /** @type {any} */ (req.user.id);
+
+    request.dispatchHistory.push({
+      mechanicId: mechanic._id,
+      action: 'accepted',
+      timestamp: new Date()
+    });
+
     await request.save();
 
-    const mechanic = await Mechanic.findOneAndUpdate(
-      { $or: [{ _id: req.user.id }, { userId: req.user.id }] },
-      { activeRequestId: request._id, status: 'busy' },
-      { new: true }
-    );
+    // Clear 30s background timeout
+    const { clearDispatchTimeout } = require('../services/matchingService');
+    clearDispatchTimeout(request._id);
+
+    mechanic.activeRequestId = request._id;
+    mechanic.status = 'busy';
+    await mechanic.save();
 
     if (/** @type {any} */ (req).io) {
       /** @type {any} */ (req).io.to(`job:${request._id}`).emit('job:accepted:notify', {
@@ -219,26 +249,42 @@ router.put('/requests/:id/accept', authMiddleware, async (req, res) => {
 router.put('/requests/:id/reject', authMiddleware, async (req, res) => {
   try {
     const ServiceRequest = require('../models/ServiceRequest');
+    const Mechanic = require('../models/Mechanic');
+
+    const mechanic = await Mechanic.findOne({ $or: [{ _id: req.user.id }, { userId: req.user.id }] });
+    if (!mechanic) {
+      return res.status(404).json({ success: false, message: 'Mechanic profile not found' });
+    }
+
     const request = await ServiceRequest.findById(req.params.id);
     if (!request) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
 
-    const mongoose = require('mongoose');
-    const mechanicObjectId = new mongoose.Types.ObjectId(req.user.id);
+    const mechanicObjectId = mechanic._id;
 
     // Add mechanic to rejected list
-    const hasRejected = request.rejectedBy.some(id => id.toString() === req.user.id.toString());
+    const hasRejected = request.rejectedBy.some(id => id.toString() === mechanicObjectId.toString());
     if (!hasRejected) {
       request.rejectedBy.push(mechanicObjectId);
-      await request.save();
     }
 
-    console.log(`[Rejection/Timeout] Mechanic ${req.user.id} declined request ${request._id}`);
+    request.dispatchHistory.push({
+      mechanicId: mechanicObjectId,
+      action: 'rejected',
+      timestamp: new Date()
+    });
+
+    await request.save();
+
+    console.log(`[Rejection] Mechanic ${mechanicObjectId} declined request ${request._id}`);
+
+    // Clear background timeout
+    const { clearDispatchTimeout, dispatchNextMechanic } = require('../services/matchingService');
+    clearDispatchTimeout(request._id);
 
     // If the rejecting mechanic was the current target, dispatch to next nearest
-    if (request.currentNotifiedMechanic && request.currentNotifiedMechanic.toString() === req.user.id.toString()) {
-      const { dispatchNextMechanic } = require('../services/matchingService');
+    if (request.currentNotifiedMechanic && request.currentNotifiedMechanic.toString() === mechanicObjectId.toString()) {
       await dispatchNextMechanic(request, /** @type {any} */ (req).io);
     }
 

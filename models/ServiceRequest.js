@@ -16,6 +16,8 @@ const ServiceRequestSchema = new mongoose.Schema({
   paymentMethod: { type: String, enum: ['cash', 'upi', 'card', 'razorpay'], default: 'cash' },
   razorpayOrderId: { type: String, default: '' },
   razorpayPaymentId: { type: String, default: '' },
+  razorpayQrCodeId: { type: String, default: '' },
+  razorpayPaymentLinkId: { type: String, default: '' },
   startOTP: { type: String, default: '' },
   arrivalOtp: { type: String, default: '' },
   otpGeneratedAt: { type: Date, default: null },
@@ -47,7 +49,12 @@ const ServiceRequestSchema = new mongoose.Schema({
   distanceCharge: { type: Number, default: 0 },
   totalPrice: { type: Number, default: 0 },
   notifiedMechanics: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Mechanic' }],
-  currentNotifiedMechanic: { type: mongoose.Schema.Types.ObjectId, ref: 'Mechanic', default: null }
+  currentNotifiedMechanic: { type: mongoose.Schema.Types.ObjectId, ref: 'Mechanic', default: null },
+  dispatchHistory: [{
+    mechanicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Mechanic' },
+    action: { type: String, enum: ['offered', 'accepted', 'rejected', 'timeout'] },
+    timestamp: { type: Date, default: Date.now }
+  }]
 }, { timestamps: true });
 ServiceRequestSchema.index({ customerLocation: '2dsphere' });
 

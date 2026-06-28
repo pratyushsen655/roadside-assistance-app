@@ -46,6 +46,37 @@ exports.uploadKYC = async (req, res, next) => {
     return res.status(400).json({ success: false, message: 'Please provide document type and secure url.' });
   }
 
+  // Validate file type & size (MIME type jpeg/png, size 10KB - 10MB)
+  let mimeType = null;
+  let fileSize = null;
+
+  if (docUrl.startsWith('data:')) {
+    const match = docUrl.match(/^data:([^;]+);base64,/);
+    mimeType = match ? match[1] : null;
+    const base64Data = docUrl.split(',')[1];
+    if (base64Data) {
+      fileSize = (base64Data.length * 3) / 4;
+    }
+  } else if (docUrl.startsWith('http://') || docUrl.startsWith('https://')) {
+    const urlLower = docUrl.toLowerCase();
+    if (urlLower.endsWith('.jpg') || urlLower.endsWith('.jpeg')) {
+      mimeType = 'image/jpeg';
+    } else if (urlLower.endsWith('.png')) {
+      mimeType = 'image/png';
+    }
+  }
+
+  const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
+  if (!mimeType || !allowedMimes.includes(mimeType)) {
+    return res.status(400).json({ success: false, message: 'Invalid file type. Only JPEG and PNG images are allowed.' });
+  }
+
+  const MIN_SIZE = 10 * 1024; // 10KB
+  const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+  if (fileSize !== null && (fileSize < MIN_SIZE || fileSize > MAX_SIZE)) {
+    return res.status(400).json({ success: false, message: 'Invalid file size. Document images must be between 10KB and 10MB.' });
+  }
+
   try {
     const mechanic = await Mechanic.findById(req.user.id);
     if (!mechanic) {

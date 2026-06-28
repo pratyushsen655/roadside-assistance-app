@@ -34,14 +34,15 @@ const socketHandler = {
           const decoded = /** @type {any} */ (jwt.verify(token, JWT_SECRET));
           socket.userId = decoded.id;
           socket.join(`user:${decoded.id}`);
-          console.log(`[Socket] Authenticated user ${decoded.id} joined room user:${decoded.id}`);
+          console.log(`[Socket] Customer/User joined room: user:${decoded.id} | Socket ID: ${socket.id}`);
 
           const Mechanic = require('../models/Mechanic');
           const mechanic = await Mechanic.findOne({ userId: decoded.id });
           if (mechanic) {
             socket.mechanicId = mechanic._id.toString();
             socket.join(`mechanic:${mechanic._id.toString()}`);
-            console.log(`[Socket] Authenticated mechanic ${mechanic._id} joined room mechanic:${mechanic._id.toString()}`);
+            console.log(`[Socket] Mechanic joined room: mechanic:${mechanic._id.toString()} | Socket ID: ${socket.id}`);
+            console.log(`[Socket Room Confirm] Mechanic ID: ${mechanic._id.toString()} joined room: mechanic:${mechanic._id.toString()} and room: user:${decoded.id} | Socket ID: ${socket.id}`);
           }
         } catch (err) {
           console.log('[Socket] Handshake auth token verification failed:', err.message);
@@ -51,7 +52,7 @@ const socketHandler = {
       // Join job room
       socket.on('join:job:room', ({ jobId }) => {
         socket.join(`job:${jobId}`);
-        console.log(`[Socket] Socket ${socket.id} joined room job:${jobId}`);
+        console.log(`[Socket] Customer/User Socket joined room: job:${jobId} | Socket ID: ${socket.id}`);
       });
 
       // Join mechanics room
@@ -163,64 +164,24 @@ const socketHandler = {
         const { calculateHaversineDistance } = require('../services/mapService');
         const { sendPushNotification } = require('../services/pushNotificationService');
 
-        // 1. ServiceRequests matching and radius expansion
+        // 1. ServiceRequests matching and radius expansion (UI feedback only)
         const pendingRequests = await ServiceRequest.find({ status: 'pending' });
         for (const reqItem of pendingRequests) {
           const elapsedSeconds = (Date.now() - new Date(reqItem.createdAt).getTime()) / 1000;
           let currentRadius = 5;
-          let prevRadius = 0;
 
           if (elapsedSeconds >= 120) {
             currentRadius = 15;
-            prevRadius = 10;
           } else if (elapsedSeconds >= 60) {
             currentRadius = 10;
-            prevRadius = 5;
           } else {
             currentRadius = 5;
-            prevRadius = 0;
           }
 
           // Emit to customer's job room to update their UI map overlay circle & status text
           io.to(`job:${reqItem._id}`).emit('request:search_radius_update', {
             radiusKm: currentRadius
           });
-
-          // If the radius has expanded to a new bracket, notify newly included mechanics
-          if (prevRadius > 0) {
-            const onlineMechanics = await Mechanic.find({ isOnline: true });
-            const [cLng, cLat] = reqItem.customerLocation?.coordinates || [0, 0];
-
-            for (const mech of onlineMechanics) {
-              const [mLng, mLat] = mech.location?.coordinates || [0, 0];
-              if (mLng === 0 && mLat === 0) continue;
-              const dist = calculateHaversineDistance(cLat, cLng, mLat, mLng);
-
-              if (dist > prevRadius && dist <= currentRadius) {
-                // Emit event to their specific socket room
-                io.to(`mechanic:${mech._id}`).emit('new_breakdown_request', {
-                  requestId: reqItem._id,
-                  vehicleType: reqItem.vehicleType,
-                  vehicleModel: reqItem.vehicleModel,
-                  issueDescription: reqItem.issueDescription,
-                  distanceKm: parseFloat(dist.toFixed(1)),
-                  estimatedFare: reqItem.totalPrice || reqItem.current_price || reqItem.pricing?.totalAmount || 350,
-                  baseRate: reqItem.baseRate || 350,
-                  distanceCharge: reqItem.distanceCharge || 0,
-                  customerLocation: { latitude: cLat, longitude: cLng }
-                });
-
-                if (mech.pushToken || mech.fcmToken) {
-                  sendPushNotification(
-                    mech.pushToken || mech.fcmToken,
-                    '💰 New Job Request Nearby',
-                    `A new request is available within ${currentRadius} km!`,
-                    { requestId: reqItem._id.toString() }
-                  ).catch(() => {});
-                }
-              }
-            }
-          }
         }
 
         // 2. SOS matching and radius expansion

@@ -264,27 +264,58 @@ router.get('/:id', async (req, res) => {
 // Helper: Accept Job
 const acceptJob = async (req, res) => {
   try {
-    const request = await ServiceRequest.findById(req.params.id);
-    if (!request) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
+    const Mechanic = require('../models/Mechanic');
+    const mechanic = await Mechanic.findOne({ $or: [{ _id: req.user.id }, { userId: req.user.id }] });
+    if (!mechanic) {
+      return res.status(404).json({ success: false, message: 'Mechanic profile not found' });
     }
 
-    request.mechanic = req.user.id;
-    request.status = 'accepted';
+    // Atomic find and update to prevent race conditions
+    const request = await ServiceRequest.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        status: { $in: ['pending', 'assigned'] },
+        $or: [
+          { currentNotifiedMechanic: mechanic._id },
+          { currentNotifiedMechanic: null }
+        ]
+      },
+      {
+        $set: {
+          mechanic: mechanic._id,
+          status: 'accepted',
+          accepted_mechanic_id: mechanic._id
+        }
+      },
+      { new: true }
+    );
+
+    if (!request) {
+      return res.status(400).json({ success: false, message: 'Request is no longer available. Already accepted by another mechanic or expired.' });
+    }
+
     if (!request.pricing || request.pricing.totalAmount === 0) {
       request.pricing = { baseFare: 150, totalAmount: 350 };
       request.amount = 350;
       request.current_price = 350;
     }
     request.accepted_price = request.current_price || request.amount || (request.pricing ? request.pricing.totalAmount : 350);
-    request.accepted_mechanic_id = req.user.id;
+
+    request.dispatchHistory.push({
+      mechanicId: mechanic._id,
+      action: 'accepted',
+      timestamp: new Date()
+    });
+
     await request.save();
 
-    const mechanic = await Mechanic.findByIdAndUpdate(
-      req.user.id,
-      { activeRequestId: request._id, status: 'busy' },
-      { new: true }
-    );
+    // Clear 30s background timeout
+    const { clearDispatchTimeout } = require('../services/matchingService');
+    clearDispatchTimeout(request._id);
+
+    mechanic.activeRequestId = request._id;
+    mechanic.status = 'busy';
+    await mechanic.save();
 
     // Notify customer room via socket
     if (req.io) {
@@ -398,6 +429,7 @@ router.put('/:id/complete', authMiddleware, completeJob);
 
 // Helper: Cancel Job
 const cancelJob = async (req, res) => {
+  console.log('[Cancel Handler Entry] Cancel request initiated. Request ID:', req.params.id);
   try {
     const request = await ServiceRequest.findById(req.params.id);
     if (!request) {
@@ -412,6 +444,7 @@ const cancelJob = async (req, res) => {
     request.cancelledBy = req.user?.role || 'user';
     request.cancellationReason = req.body.cancellationReason || 'Cancelled by user request';
     await request.save();
+    console.log('[Cancel Handler DB Update] Request status updated to cancelled. Request ID:', request._id);
 
     // Release customer
     if (request.customer) {
@@ -427,7 +460,11 @@ const cancelJob = async (req, res) => {
     }
 
     if (req.io) {
+      console.log('[Cancel Handler Emit Before] Emitting job:status:changed to room:', 'job:' + request._id);
       req.io.to(`job:${request._id}`).emit('job:status:changed', { status: 'cancelled' });
+      console.log('[Cancel Handler Emit After] Successfully emitted job:status:changed to room:', 'job:' + request._id);
+    } else {
+      console.log('[Cancel Handler Warning] req.io is undefined, cannot emit socket event');
     }
 
     res.status(200).json({
@@ -436,6 +473,7 @@ const cancelJob = async (req, res) => {
       request
     });
   } catch (error) {
+    console.error('[Cancel Handler Error] Error cancelling job:', error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -596,10 +634,11 @@ router.post('/:id/mark-arrived', authMiddleware, async (req, res) => {
     console.log(`[OTP Generated] Request: ${request._id} | OTP: ${otp} | GeneratedAt: ${request.otpGeneratedAt}`);
 
     // Emit Socket.io event to job room
-    if (req.io) {
-      req.io.to(`job:${request._id}`).emit('job:status:changed', { status: 'arrived' });
-      req.io.to(`job:${request._id}`).emit('arrival_otp', { requestId: request._id, otp });
-      req.io.to(`user:${request.customer}`).emit('arrival_otp', { requestId: request._id, otp });
+    const reqWithIo = /** @type {any} */ (req);
+    if (reqWithIo.io) {
+      reqWithIo.io.to(`job:${request._id}`).emit('job:status:changed', { status: 'arrived' });
+      reqWithIo.io.to(`job:${request._id}`).emit('arrival_otp', { requestId: request._id, otp });
+      reqWithIo.io.to(`user:${request.customer}`).emit('arrival_otp', { requestId: request._id, otp });
       console.log(`[OTP Socket Emitted] Emitted arrival_otp event for job:${request._id} and user:${request.customer}`);
     }
 
@@ -730,6 +769,9 @@ const verifyOtpHandler = async (req, res) => {
 
 router.post('/:id/verify-otp', authMiddleware, verifyOtpHandler);
 router.post('/:id/verify-start', authMiddleware, verifyOtpHandler);
+
+// 10. Generate PDF invoice for request
+router.get('/:id/invoice', authMiddleware, require('../controllers/invoiceController').generateInvoice);
 
 module.exports = router;
 
