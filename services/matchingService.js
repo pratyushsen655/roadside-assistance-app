@@ -225,7 +225,7 @@ const dispatchNextMechanic = async (request, io) => {
     } catch (err) {
       console.error(`[Matching TIMEOUT ERROR] Failed to handle timeout for request ${request._id}:`, err.message);
     }
-  }, 30000);
+  }, 120000);
 
   activeTimeouts.set(request._id.toString(), timeoutId);
 };
