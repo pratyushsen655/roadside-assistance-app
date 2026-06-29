@@ -64,10 +64,14 @@ router.get('/requests/pending', authMiddleware, async (req, res) => {
       return res.status(200).json([]);
     }
 
-    // Retrieve all pending requests not rejected by this mechanic
+    // Retrieve all pending requests not rejected by this mechanic and offered to them or to no one
     const rawRequests = await ServiceRequest.find({
       status: 'pending',
-      rejectedBy: { $ne: mechanic._id }
+      rejectedBy: { $ne: mechanic._id },
+      $or: [
+        { currentNotifiedMechanic: mechanic._id },
+        { currentNotifiedMechanic: null }
+      ]
     }).populate('customer', 'name phone');
 
     const items = rawRequests.map(reqItem => {

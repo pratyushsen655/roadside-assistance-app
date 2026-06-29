@@ -37,7 +37,7 @@ const socketHandler = {
           console.log(`[Socket] Customer/User joined room: user:${decoded.id} | Socket ID: ${socket.id}`);
 
           const Mechanic = require('../models/Mechanic');
-          const mechanic = await Mechanic.findOne({ userId: decoded.id });
+          const mechanic = await Mechanic.findOne({ $or: [{ _id: decoded.id }, { userId: decoded.id }] });
           if (mechanic) {
             socket.mechanicId = mechanic._id.toString();
             socket.join(`mechanic:${mechanic._id.toString()}`);

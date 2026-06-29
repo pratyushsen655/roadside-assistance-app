@@ -34,6 +34,7 @@ const expandSearchRadius = async (request, io) => {
       targetRadius = 15;
     } else if (elapsedSeconds >= 120) {
       console.log(`[Matching] Maximum search radius (15km) reached. No more mechanics found for request ${request._id}`);
+      request.status = 'unfulfilled';
       request.currentNotifiedMechanic = null;
       await request.save();
       if (io) {
@@ -48,7 +49,7 @@ const expandSearchRadius = async (request, io) => {
 
     const nearby = await Mechanic.find({
       status: 'online',
-      kycStatus: { $ne: 'pending' },
+      'kyc.status': { $ne: 'pending' },
       location: {
         $near: {
           $geometry: { type: 'Point', coordinates: [cLng, cLat] },
@@ -75,6 +76,7 @@ const expandSearchRadius = async (request, io) => {
         await expandSearchRadius(request, io);
       } else {
         console.log(`[Matching] No new mechanics found at 15km for request ${request._id}`);
+        request.status = 'unfulfilled';
         request.currentNotifiedMechanic = null;
         await request.save();
         if (io) {
@@ -244,7 +246,7 @@ const startMatchingProcess = async (request, io, radiusKm = 5) => {
   // Query MongoDB for online mechanics using 2dsphere near proximity index
   const nearbyMechanics = await Mechanic.find({
     status: 'online',
-    kycStatus: { $ne: 'pending' },
+    'kyc.status': { $ne: 'pending' },
     location: {
       $near: {
         $geometry: {

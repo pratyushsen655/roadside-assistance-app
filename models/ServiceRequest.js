@@ -9,7 +9,7 @@ const ServiceRequestSchema = new mongoose.Schema({
   issueDescription: { type: String, required: true },
   customerLocation: { type: { type: String, enum: ['Point'], default: 'Point' }, coordinates: { type: [Number], required: true } },
   customerAddress: { type: String, default: '' },
-  status: { type: String, enum: ['pending', 'assigned', 'accepted', 'on_the_way', 'arrived', 'work_in_progress', 'completed', 'cancelled'], default: 'pending' },
+  status: { type: String, enum: ['pending', 'assigned', 'accepted', 'on_the_way', 'arrived', 'work_in_progress', 'completed', 'cancelled', 'unfulfilled'], default: 'pending' },
   pricing: { baseFare: { type: Number, default: 0 }, totalAmount: { type: Number, default: 0 } },
   amount: { type: Number, default: 0 },
   paymentStatus: { type: String, enum: ['pending', 'paid', 'failed'], default: 'pending' },

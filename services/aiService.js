@@ -25,7 +25,7 @@ const findOptimalMechanics = async (serviceRequest, maxRadiusKm = 4) => {
     vehicleSpecializations: vehicleType,
     _id: { $nin: serviceRequest.rejectedBy || [] },
     activeRequestId: null,
-    kycStatus: { $ne: 'pending' }, // Only approved mechanics
+    'kyc.status': { $ne: 'pending' }, // Only approved mechanics
     location: {
       $nearSphere: {
         $geometry: {

@@ -27,12 +27,11 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Payment amount is required' });
     }
 
-    const isDev = process.env.NODE_ENV !== 'production';
     const isPlaceholderKey = !process.env.RAZORPAY_KEY_ID || 
                              process.env.RAZORPAY_KEY_ID.includes('xxxx') || 
                              process.env.RAZORPAY_KEY_ID.includes('YourKeyId');
 
-    if (isDev && isPlaceholderKey) {
+    if (isPlaceholderKey) {
       return res.status(200).json({
         success: true,
         orderId: 'order_mock_' + Math.random().toString(36).substring(7),
@@ -88,8 +87,12 @@ exports.verifyPayment = async (req, res) => {
     const key_secret = process.env.RAZORPAY_KEY_SECRET || 'rzp_test_YourKeySecret';
     
     // Dev bypass for simulated Expo Go payments
+    const isPlaceholderKey = !process.env.RAZORPAY_KEY_ID || 
+                             process.env.RAZORPAY_KEY_ID.includes('xxxx') || 
+                             process.env.RAZORPAY_KEY_ID.includes('YourKeyId');
     const isDev = process.env.NODE_ENV !== 'production';
-    const isMock = isDev && (finalSignature === 'mock_signature' || finalSignature === 'sig_mock_123');
+    const isMock = (isDev || isPlaceholderKey) && 
+                   (finalSignature === 'mock_signature' || finalSignature === 'sig_mock_123' || finalSignature.startsWith('mock_'));
 
     let verified = false;
     if (isMock) {
@@ -241,18 +244,20 @@ exports.createQrOrder = async (req, res) => {
 
     const amountInPaise = Math.round(Number(finalAmount) * 100);
 
+    console.log('[DEBUG] RAZORPAY_KEY_ID is defined:', !!process.env.RAZORPAY_KEY_ID);
+    console.log('[DEBUG] RAZORPAY_KEY_SECRET is defined:', !!process.env.RAZORPAY_KEY_SECRET);
+
     const razorpay = new Razorpay({
       key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_YourKeyId',
       key_secret: process.env.RAZORPAY_KEY_SECRET || 'rzp_test_YourKeySecret',
     });
 
-    const isDev = process.env.NODE_ENV !== 'production';
     const isPlaceholderKey = !process.env.RAZORPAY_KEY_ID || 
                              process.env.RAZORPAY_KEY_ID.includes('xxxx') || 
                              process.env.RAZORPAY_KEY_ID.includes('YourKeyId');
 
     // Dev mock bypass if placeholder keys are detected
-    if (isDev && isPlaceholderKey) {
+    if (isPlaceholderKey) {
       const mockOrderId = 'order_mock_' + Math.random().toString(36).substring(7);
       const mockQrCodeId = 'qr_mock_' + Math.random().toString(36).substring(7);
       
@@ -297,39 +302,57 @@ exports.createQrOrder = async (req, res) => {
       });
 
     } catch (qrError) {
-      console.warn('[Razorpay QR API Failed, falling back to Payment Link]:', qrError.message);
+      console.warn('[Razorpay QR API Failed, falling back to Payment Link]:');
+      console.warn('  Error message:', qrError.message);
+      console.warn('  Error description:', qrError.description);
+      if (qrError.error) {
+        console.warn('  Error object description:', qrError.error.description);
+        console.warn('  Error object full:', JSON.stringify(qrError.error));
+      }
 
       // Fallback to Payment Link API
-      const paymentLink = /** @type {any} */ (await razorpay.paymentLink.create(/** @type {any} */ ({
-        amount: amountInPaise,
-        currency: 'INR',
-        accept_partial: false,
-        description: `Service Request ${requestId}`,
-        reference_id: requestId,
-        callback_url: `https://example.com/payment-callback`,
-        callback_method: 'get',
-        notes: {
-          requestId: requestId
+      try {
+        const paymentLink = /** @type {any} */ (await razorpay.paymentLink.create(/** @type {any} */ ({
+          amount: amountInPaise,
+          currency: 'INR',
+          accept_partial: false,
+          description: `Service Request ${requestId}`,
+          reference_id: requestId,
+          callback_url: `https://example.com/payment-callback`,
+          callback_method: 'get',
+          notes: {
+            requestId: requestId
+          }
+        })));
+
+        request.razorpayPaymentLinkId = paymentLink.id;
+        request.razorpayOrderId = paymentLink.order_id || '';
+        await request.save();
+
+        return res.status(200).json({
+          success: true,
+          paymentLinkId: paymentLink.id,
+          orderId: paymentLink.order_id || '',
+          method: 'payment_link',
+          qrUrl: paymentLink.short_url,
+          amount: finalAmount,
+          currency: 'INR'
+        });
+      } catch (plError) {
+        console.error('[Razorpay Payment Link Fallback Failed]:');
+        console.error('  Error message:', plError.message);
+        console.error('  Error description:', plError.description);
+        if (plError.error) {
+          console.error('  Error object description:', plError.error.description);
+          console.error('  Error object full:', JSON.stringify(plError.error));
         }
-      })));
-
-      request.razorpayPaymentLinkId = paymentLink.id;
-      request.razorpayOrderId = paymentLink.order_id || '';
-      await request.save();
-
-      return res.status(200).json({
-        success: true,
-        paymentLinkId: paymentLink.id,
-        orderId: paymentLink.order_id || '',
-        method: 'payment_link',
-        qrUrl: paymentLink.short_url,
-        amount: finalAmount,
-        currency: 'INR'
-      });
+        throw plError; // rethrow to be caught by outer catch
+      }
     }
   } catch (error) {
     console.error('[createQrOrder Error]:', error);
-    return res.status(500).json({ success: false, message: error.message });
+    const errMsg = error.message || error.description || (error.error && error.error.description) || 'Could not generate QR payment';
+    return res.status(500).json({ success: false, message: errMsg });
   }
 };
 
@@ -350,13 +373,12 @@ exports.getPaymentStatus = async (req, res) => {
       return res.status(200).json({ success: true, paid: true });
     }
 
-    const isDev = process.env.NODE_ENV !== 'production';
     const isPlaceholderKey = !process.env.RAZORPAY_KEY_ID || 
                              process.env.RAZORPAY_KEY_ID.includes('xxxx') || 
                              process.env.RAZORPAY_KEY_ID.includes('YourKeyId');
 
     // Dev bypass for placeholder keys
-    if (isDev && isPlaceholderKey) {
+    if (isPlaceholderKey) {
       return res.status(200).json({ success: true, paid: false });
     }
 
@@ -466,8 +488,11 @@ exports.handleWebhook = async (req, res) => {
     const secret = process.env.RAZORPAY_KEY_SECRET || 'rzp_test_YourKeySecret';
     const bodyStr = req.rawBody ? req.rawBody.toString() : JSON.stringify(req.body);
     
+    const isPlaceholderKey = !process.env.RAZORPAY_KEY_ID || 
+                             process.env.RAZORPAY_KEY_ID.includes('xxxx') || 
+                             process.env.RAZORPAY_KEY_ID.includes('YourKeyId');
     const isDev = process.env.NODE_ENV !== 'production';
-    const isMock = isDev && (signature === 'mock_signature' || signature.startsWith('mock_'));
+    const isMock = (isDev || isPlaceholderKey) && (signature === 'mock_signature' || signature.startsWith('mock_'));
     
     let verified = false;
     if (isMock) {
