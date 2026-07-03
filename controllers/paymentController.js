@@ -595,3 +595,76 @@ exports.handleWebhook = async (req, res) => {
   }
 };
 
+// Simulate successful payment (for testing/mock purposes)
+exports.simulatePayment = async (req, res) => {
+  try {
+    const { requestId } = req.body;
+    if (!requestId) {
+      return res.status(400).json({ success: false, message: 'Request ID is required' });
+    }
+
+    const request = await ServiceRequest.findById(requestId);
+    if (!request) {
+      return res.status(404).json({ success: false, message: 'Service request not found' });
+    }
+
+    if (request.paymentStatus === 'paid') {
+      return res.status(200).json({ success: true, message: 'Payment already completed' });
+    }
+
+    request.paymentStatus = 'paid';
+    request.paymentMethod = 'razorpay';
+    request.razorpayPaymentId = 'pay_sim_' + Math.random().toString(36).substring(7);
+    await request.save();
+
+    const finalAmount = request.accepted_price || request.pricing?.totalAmount || request.amount || request.totalPrice || 0;
+
+    // update mechanic earnings
+    if (request.mechanic) {
+      const commissionSplit = 0.80;
+      const creditAmount = Math.round(finalAmount * commissionSplit);
+      const mechanic = await Mechanic.findById(request.mechanic);
+      if (mechanic) {
+        const earnings = /** @type {any} */ (mechanic.earnings);
+        if (typeof earnings === 'number') {
+          mechanic.earnings = earnings + creditAmount;
+        } else if (earnings && typeof earnings.total === 'number') {
+          earnings.total += creditAmount;
+        } else {
+          mechanic.earnings = creditAmount;
+        }
+        mechanic.totalJobs = (mechanic.totalJobs || 0) + 1;
+        await mechanic.save();
+      }
+    }
+
+    // Create Payment transaction record
+    await Payment.create({
+      requestId: request._id,
+      userId: request.customer || req.user?.id,
+      mechanicId: request.mechanic,
+      amount: finalAmount,
+      paymentMethod: 'razorpay',
+      razorpayOrderId: request.razorpayOrderId || 'order_sim_' + Math.random().toString(36).substring(7),
+      razorpayPaymentId: request.razorpayPaymentId || 'pay_sim_' + Math.random().toString(36).substring(7),
+      status: 'completed'
+    });
+
+    // Emit socket event 'payment:completed' to job room
+    const socketHandler = require('../sockets/socketHandler');
+    const io = socketHandler.getIo();
+    if (io) {
+      io.to(`job:${request._id.toString()}`).emit('payment:completed', {
+        requestId: request._id,
+        paymentStatus: 'paid',
+        razorpayPaymentId: request.razorpayPaymentId
+      });
+    }
+
+    return res.status(200).json({ success: true, message: 'Payment simulated successfully' });
+  } catch (error) {
+    console.error('[simulatePayment Error]:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
