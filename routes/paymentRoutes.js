@@ -21,6 +21,9 @@ router.get('/history', authMiddleware, paymentController.getHistory);
 // POST /api/payments/create-qr-order
 router.post('/create-qr-order', authMiddleware, paymentController.createQrOrder);
 
+// POST /api/payments/simulate-payment
+router.post('/simulate-payment', authMiddleware, paymentController.simulatePayment);
+
 // GET /api/payments/status/:requestId
 router.get('/status/:requestId', authMiddleware, paymentController.getPaymentStatus);
 
