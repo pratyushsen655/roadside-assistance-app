@@ -232,18 +232,20 @@ exports.getHistory = async (req, res) => {
 
 // Create Razorpay QR payment or fallback to Payment Link
 exports.createQrOrder = async (req, res) => {
+  let request;
+  let finalAmount;
   try {
     const { requestId } = req.body;
     if (!requestId) {
       return res.status(400).json({ success: false, message: 'Request ID is required' });
     }
 
-    const request = await ServiceRequest.findById(requestId);
+    request = await ServiceRequest.findById(requestId);
     if (!request) {
       return res.status(404).json({ success: false, message: 'Service request not found' });
     }
 
-    const finalAmount = request.accepted_price || request.pricing?.totalAmount || request.amount || request.totalPrice;
+    finalAmount = request.accepted_price || request.pricing?.totalAmount || request.amount || request.totalPrice;
     if (!finalAmount) {
       return res.status(400).json({ success: false, message: 'Invalid or missing pricing amount' });
     }
@@ -283,7 +285,7 @@ exports.createQrOrder = async (req, res) => {
 
     // Create Payment Link
     try {
-      const paymentLink = /** @type {any} */ (await razorpay.paymentLink.create({
+      const paymentLink = /** @type {any} */ (await razorpay.paymentLink.create(/** @type {any} */ ({
         amount: amountInPaise,
         currency: 'INR',
         description: 'RoadMitra Service Payment',
@@ -293,7 +295,7 @@ exports.createQrOrder = async (req, res) => {
         notes: {
           requestId: requestId
         }
-      }));
+      })));
 
       request.razorpayPaymentLinkId = paymentLink.id;
       request.razorpayOrderId = paymentLink.order_id || '';
@@ -324,10 +326,13 @@ exports.createQrOrder = async (req, res) => {
     try {
       const mockOrderId = 'order_mock_' + Math.random().toString(36).substring(7);
       const mockPaymentLinkId = 'pl_mock_' + Math.random().toString(36).substring(7);
+      const fallbackAmount = finalAmount || 350;
       
-      request.razorpayOrderId = mockOrderId;
-      request.razorpayPaymentLinkId = mockPaymentLinkId;
-      await request.save();
+      if (request) {
+        request.razorpayOrderId = mockOrderId;
+        request.razorpayPaymentLinkId = mockPaymentLinkId;
+        await request.save();
+      }
 
       return res.status(200).json({
         success: true,
@@ -335,7 +340,7 @@ exports.createQrOrder = async (req, res) => {
         orderId: mockOrderId,
         method: 'payment_link',
         qrUrl: `https://mock-payment.razorpay.com/${mockPaymentLinkId}`,
-        amount: finalAmount,
+        amount: fallbackAmount,
         currency: 'INR',
         mocked: true
       });

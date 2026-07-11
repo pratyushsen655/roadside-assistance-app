@@ -40,6 +40,30 @@ const BASE_RATES = {
     fuel_delivery: 300,
     engine_repair: 500,
     other: 300
+  },
+  truck: {
+    flat_tire: 500,
+    battery_jump: 500,
+    towing: 1500,
+    fuel_delivery: 500,
+    engine_repair: 800,
+    other: 500
+  },
+  tractor: {
+    flat_tire: 600,
+    battery_jump: 600,
+    towing: 1800,
+    fuel_delivery: 600,
+    engine_repair: 1000,
+    other: 600
+  },
+  bus: {
+    flat_tire: 700,
+    battery_jump: 700,
+    towing: 2000,
+    fuel_delivery: 700,
+    engine_repair: 1200,
+    other: 700
   }
 };
 

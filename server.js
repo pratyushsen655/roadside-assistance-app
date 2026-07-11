@@ -104,6 +104,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const referralRoutes = require('./routes/referralRoutes');
 const ratingRoutes = require('./routes/ratingRoutes');
 const invoiceRoutes = require('./routes/invoiceRoutes');
+const pricingRoutes = require('./routes/pricing');
 
 // Mount API Routers
 app.use('/api/auth', authRoutes);
@@ -122,6 +123,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/ratings', ratingRoutes);
 app.use('/api/invoices', invoiceRoutes);
+app.use('/api/pricing', pricingRoutes);
 app.use('/api/address', require('./routes/address'));
 
 // Catch-all route handler for 404

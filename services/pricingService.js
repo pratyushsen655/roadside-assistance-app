@@ -23,6 +23,18 @@ const PRICING_CONFIG = {
   other: {
     baseFare: 250,
     ratePerKm: 25,
+  },
+  truck: {
+    baseFare: 500,
+    ratePerKm: 40,
+  },
+  tractor: {
+    baseFare: 600,
+    ratePerKm: 45,
+  },
+  bus: {
+    baseFare: 700,
+    ratePerKm: 50,
   }
 };
 

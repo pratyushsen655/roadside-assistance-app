@@ -3,6 +3,7 @@ const authMiddleware = require('../middleware/authMiddleware');
 const ServiceRequest = require('../models/ServiceRequest');
 const Mechanic = require('../models/Mechanic');
 const User = require('../models/User');
+const PricingConfig = require('../models/PricingConfig');
 
 const router = express.Router();
 
@@ -90,8 +91,24 @@ router.post('/', authMiddleware, async (req, res) => {
       distanceKm = parseFloat((closestDistance ?? 0).toFixed(2));
     }
 
-    const priceBreakdown = calculateServicePrice(finalVehicleType, finalServiceType, distanceKm);
-    const finalPriceVal = priceBreakdown.totalPrice;
+    // Fetch dynamic pricing config from DB
+    const pricingConfig = await PricingConfig.findOne({ serviceType: finalServiceType });
+    let baseRate, distanceCharge, finalPriceVal;
+
+    if (pricingConfig) {
+      baseRate = pricingConfig.baseFare;
+      const perKmRate = pricingConfig.perKmRate;
+      const minCharge = pricingConfig.minCharge || 0;
+      
+      distanceCharge = Math.round(distanceKm * perKmRate);
+      const totalFare = baseRate + (distanceKm * perKmRate);
+      finalPriceVal = Math.round(Math.max(totalFare, minCharge));
+    } else {
+      const priceBreakdown = calculateServicePrice(finalVehicleType, finalServiceType, distanceKm);
+      baseRate = priceBreakdown.baseRate;
+      distanceCharge = priceBreakdown.distanceCharge;
+      finalPriceVal = priceBreakdown.totalPrice;
+    }
 
     const newRequest = await ServiceRequest.create({
       customer: req.user.id,
@@ -105,10 +122,10 @@ router.post('/', authMiddleware, async (req, res) => {
       initial_price: finalPriceVal,
       current_price: finalPriceVal,
       last_price_update_time: new Date(),
-      pricing: { baseFare: priceBreakdown.baseRate, totalAmount: finalPriceVal },
+      pricing: { baseFare: baseRate, totalAmount: finalPriceVal },
       amount: finalPriceVal,
-      baseRate: priceBreakdown.baseRate,
-      distanceCharge: priceBreakdown.distanceCharge,
+      baseRate: baseRate,
+      distanceCharge: distanceCharge,
       totalPrice: finalPriceVal,
     });
 
@@ -187,15 +204,31 @@ router.post('/estimate', authMiddleware, async (req, res) => {
       }
     }
 
-    const { calculateServicePrice } = require('../config/constants');
-    const fare = calculateServicePrice(finalVehicleType, finalServiceType, distanceKm);
+    const pricingConfig = await PricingConfig.findOne({ serviceType: finalServiceType });
+    let baseRate, distanceCharge, totalPrice;
+
+    if (pricingConfig) {
+      baseRate = pricingConfig.baseFare;
+      const perKmRate = pricingConfig.perKmRate;
+      const minCharge = pricingConfig.minCharge || 0;
+      
+      distanceCharge = Math.round(distanceKm * perKmRate);
+      const totalFare = baseRate + (distanceKm * perKmRate);
+      totalPrice = Math.round(Math.max(totalFare, minCharge));
+    } else {
+      const { calculateServicePrice } = require('../config/constants');
+      const fare = calculateServicePrice(finalVehicleType, finalServiceType, distanceKm);
+      baseRate = fare.baseRate;
+      distanceCharge = fare.distanceCharge;
+      totalPrice = fare.totalPrice;
+    }
 
     res.status(200).json({
       success: true,
       fare: {
-        baseRate: fare.baseRate,
-        distanceCharge: fare.distanceCharge,
-        totalPrice: fare.totalPrice,
+        baseRate,
+        distanceCharge,
+        totalPrice,
         distanceKm: distanceKm
       }
     });
