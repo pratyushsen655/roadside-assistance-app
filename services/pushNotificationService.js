@@ -140,11 +140,14 @@ const sendRingingRequestNotification = async (token, payload) => {
     apns: {
       headers: {
         'apns-priority': '10',
-        'apns-push-type': 'background',
       },
       payload: {
         aps: {
-          'content-available': 1,
+          alert: {
+            title: 'Incoming Service Request',
+            body: `New ${payload.serviceType || 'assistance'} request nearby: ${payload.customerAddress || 'Nearby Coordinates'}`
+          },
+          sound: 'default'
         },
       },
     },

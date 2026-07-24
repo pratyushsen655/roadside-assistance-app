@@ -280,6 +280,12 @@ router.get('/mechanics', async (req, res) => {
         bio: mech.bio || '',
         experience: mech.experience || 0,
         vehicleSpecializations: mech.vehicleSpecializations || [],
+        kyc: {
+          status: mech.kyc?.status || 'pending',
+          docType: mech.kyc?.docType || '',
+          docUrl: mech.kyc?.docUrl || '',
+          rejectionReason: mech.kyc?.rejectionReason || '',
+        },
         history: mappedHistory
       };
     }));
@@ -320,6 +326,56 @@ router.put('/mechanics/:id/block', async (req, res) => {
     mechanic.isBlocked = !mechanic.isBlocked;
     await mechanic.save();
     res.status(200).json({ success: true, isBlocked: mechanic.isBlocked });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// PUT /api/admin/mechanics/:id/kyc
+// Body: { action: 'approve' | 'reject', rejectionReason?: string }
+router.put('/mechanics/:id/kyc', async (req, res) => {
+  try {
+    const Mechanic = require('../models/Mechanic');
+    const { action, rejectionReason } = req.body;
+
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ success: false, message: "action must be 'approve' or 'reject'" });
+    }
+
+    const mechanic = await Mechanic.findById(req.params.id);
+    if (!mechanic) {
+      return res.status(404).json({ success: false, message: 'Mechanic not found' });
+    }
+
+    if (!mechanic.kyc) {
+      mechanic.kyc = {};
+    }
+
+    if (action === 'approve') {
+      mechanic.kyc.status = 'approved';
+      mechanic.kyc.rejectionReason = '';
+      mechanic.isVerified = true;          // approving KYC also verifies the mechanic
+    } else {
+      if (!rejectionReason || !rejectionReason.trim()) {
+        return res.status(400).json({ success: false, message: 'rejectionReason is required when rejecting.' });
+      }
+      mechanic.kyc.status = 'rejected';
+      mechanic.kyc.rejectionReason = rejectionReason.trim();
+      mechanic.isVerified = false;         // revoke verification on rejection
+    }
+
+    await mechanic.save();
+
+    res.status(200).json({
+      success: true,
+      kyc: {
+        status: mechanic.kyc.status,
+        docType: mechanic.kyc.docType || '',
+        docUrl: mechanic.kyc.docUrl || '',
+        rejectionReason: mechanic.kyc.rejectionReason || '',
+      },
+      isVerified: mechanic.isVerified,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

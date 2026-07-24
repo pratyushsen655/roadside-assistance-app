@@ -7,6 +7,22 @@ const PricingConfig = require('../models/PricingConfig');
 
 const router = express.Router();
 
+// Helper to map route serviceType to PricingConfig schema naming conventions
+const mapToPricingServiceType = (sType) => {
+  const mapping = {
+    'flat_tire': 'flat-tire',
+    'fuel_delivery': 'fuel-delivery',
+    'engine_repair': 'engine-repair',
+    'puncture_repair': 'puncture-repair',
+    'oil_change': 'oil-change',
+    'battery_jump': 'battery_jump',
+    'towing': 'towing',
+    'breakdown': 'breakdown',
+    'other': 'other'
+  };
+  return mapping[sType] || sType;
+};
+
 // 1. Create a service request
 router.post('/', authMiddleware, async (req, res) => {
   try {
@@ -92,7 +108,10 @@ router.post('/', authMiddleware, async (req, res) => {
     }
 
     // Fetch dynamic pricing config from DB
-    const pricingConfig = await PricingConfig.findOne({ serviceType: finalServiceType });
+    const pricingConfig = await PricingConfig.findOne({ 
+      serviceType: mapToPricingServiceType(finalServiceType), 
+      vehicleType: finalVehicleType 
+    });
     let baseRate, distanceCharge, finalPriceVal;
 
     if (pricingConfig) {
@@ -132,12 +151,12 @@ router.post('/', authMiddleware, async (req, res) => {
     // Link customer activeRequestId
     await User.findByIdAndUpdate(req.user.id, { activeRequestId: newRequest._id });
 
-    // Start matching and sequential dispatch process (Layer 1, 2, 3)
+    // Start sequential nearest-mechanic dispatch process
     try {
-      const { startMatchingProcess } = require('../services/matchingService');
-      await startMatchingProcess(newRequest, /** @type {any} */ (req).io, 5);
-    } catch (matchingErr) {
-      console.error('[Matching Error] Failed to start matching process:', matchingErr.message);
+      const dispatchService = require('../services/dispatchService');
+      await dispatchService.startDispatch(newRequest._id.toString(), /** @type {any} */ (req).io);
+    } catch (dispatchErr) {
+      console.error('[Dispatch Error] Failed to start dispatch process:', dispatchErr.message);
     }
 
     // Return format compatible with both data.request._id and data._id
@@ -204,7 +223,10 @@ router.post('/estimate', authMiddleware, async (req, res) => {
       }
     }
 
-    const pricingConfig = await PricingConfig.findOne({ serviceType: finalServiceType });
+    const pricingConfig = await PricingConfig.findOne({ 
+      serviceType: mapToPricingServiceType(finalServiceType), 
+      vehicleType: finalVehicleType 
+    });
     let baseRate, distanceCharge, totalPrice;
 
     if (pricingConfig) {
@@ -805,6 +827,198 @@ router.post('/:id/verify-start', authMiddleware, verifyOtpHandler);
 
 // 10. Generate PDF invoice for request
 router.get('/:id/invoice', authMiddleware, require('../controllers/invoiceController').generateInvoice);
+
+// 11. Accept Sequential Dispatch Offer (mechanic-authenticated)
+router.post('/:id/dispatch/accept', authMiddleware, async (req, res) => {
+  try {
+    const Mechanic = require('../models/Mechanic');
+    const dispatchService = require('../services/dispatchService');
+    const { getRouteDetails } = require('../services/mapService');
+
+    // Fetch the authenticated mechanic
+    const mechanic = await Mechanic.findOne({ $or: [{ _id: req.user.id }, { userId: req.user.id }] });
+    if (!mechanic) {
+      return res.status(404).json({ success: false, message: 'Mechanic profile not found.' });
+    }
+
+    // Atomic update to assign mechanic and prevent race conditions
+    const request = await ServiceRequest.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        dispatchStatus: 'searching',
+        currentCandidateMechanic: mechanic._id
+      },
+      {
+        $set: {
+          status: 'accepted',
+          dispatchStatus: 'assigned',
+          mechanic: mechanic._id,
+          accepted_mechanic_id: mechanic._id,
+          currentCandidateMechanic: mechanic._id,
+          'dispatchedMechanics.$[elem].status': 'accepted'
+        }
+      },
+      {
+        arrayFilters: [{ 'elem.mechanicId': mechanic._id }],
+        new: true
+      }
+    );
+
+    if (!request) {
+      return res.status(400).json({
+        success: false,
+        message: 'Request is no longer available. It may have been accepted by another mechanic, cancelled, or timed out.'
+      });
+    }
+
+    // Initialize/Ensure pricing is set
+    if (!request.pricing || request.pricing.totalAmount === 0) {
+      request.pricing = { baseFare: 150, totalAmount: 350 };
+      request.amount = 350;
+      request.current_price = 350;
+    }
+    request.accepted_price = request.current_price || request.amount || (request.pricing ? request.pricing.totalAmount : 350);
+    await request.save();
+
+    // Stop active dispatch timeout
+    dispatchService.cleanActiveTimer(request._id.toString());
+
+    // Set mechanic profile to busy
+    mechanic.activeRequestId = request._id;
+    mechanic.status = 'busy';
+    await mechanic.save();
+
+    // Get Socket.io instance
+    const io = /** @type {any} */ (req).io || require('../sockets/socketHandler').getIo();
+
+    if (io) {
+      // 1. Emit 'request-taken' to all other candidate/online mechanics so their UIs dismiss
+      const radiusInMeters = Number(process.env.DEFAULT_DISPATCH_RADIUS) || 10000;
+      const otherCandidates = await dispatchService.findNearbyMechanics(
+        request.customerLocation,
+        radiusInMeters,
+        [mechanic._id.toString()],
+        request.vehicleType
+      );
+      otherCandidates.forEach(m => {
+        io.to(`mechanic:${m._id.toString()}`).emit('request-taken', { requestId: request._id.toString() });
+        if (m.userId) {
+          io.to(`user:${m.userId.toString()}`).emit('request-taken', { requestId: request._id.toString() });
+        }
+      });
+
+      // 2. Emit 'mechanic-assigned' to customer's socket room and job room
+      const route = await getRouteDetails(mechanic.location.coordinates, request.customerLocation.coordinates);
+      
+      const payload = {
+        requestId: request._id.toString(),
+        mechanicId: mechanic._id.toString(),
+        mechanicName: mechanic.name || 'Mechanic',
+        mechanicPhone: mechanic.phone,
+        eta: route.durationMins,
+        distanceKm: route.distanceKm,
+        vehicleDetails: {
+          type: request.vehicleType || 'car',
+          model: request.vehicleModel || 'Model',
+          number: request.vehicleNumber || 'Number'
+        },
+        location: {
+          latitude: mechanic.location.coordinates[1],
+          longitude: mechanic.location.coordinates[0]
+        }
+      };
+
+      io.to(`user:${request.customer.toString()}`).emit('mechanic-assigned', payload);
+      io.to(`job:${request._id.toString()}`).emit('mechanic-assigned', payload);
+
+      // Emitting status changed event for compatibility
+      io.to(`job:${request._id.toString()}`).emit('job:status:changed', { status: 'accepted' });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Request accepted successfully.',
+      mechanic: {
+        id: mechanic._id,
+        name: mechanic.name,
+        phone: mechanic.phone,
+        location: mechanic.location,
+        vehicleSpecializations: mechanic.vehicleSpecializations
+      },
+      request
+    });
+  } catch (error) {
+    console.error('[Dispatch Accept Route Error]', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 12. Reject Sequential Dispatch Offer (mechanic-authenticated)
+router.post('/:id/dispatch/reject', authMiddleware, async (req, res) => {
+  try {
+    const Mechanic = require('../models/Mechanic');
+    const dispatchService = require('../services/dispatchService');
+
+    // Fetch the authenticated mechanic
+    const mechanic = await Mechanic.findOne({ $or: [{ _id: req.user.id }, { userId: req.user.id }] });
+    if (!mechanic) {
+      return res.status(404).json({ success: false, message: 'Mechanic profile not found.' });
+    }
+
+    // Verify mechanic is the currently targeted candidate
+    const request = await ServiceRequest.findOne({
+      _id: req.params.id,
+      dispatchStatus: 'searching',
+      currentCandidateMechanic: mechanic._id
+    });
+
+    if (!request) {
+      return res.status(400).json({
+        success: false,
+        message: 'You are not the currently targeted candidate for this request or the request is no longer searching.'
+      });
+    }
+
+    // Update status to rejected in dispatchedMechanics list
+    const matchIdx = request.dispatchedMechanics.findIndex(dm => dm.mechanicId.toString() === mechanic._id.toString());
+    if (matchIdx > -1) {
+      request.dispatchedMechanics[matchIdx].status = 'rejected';
+    } else {
+      request.dispatchedMechanics.push({
+        mechanicId: mechanic._id,
+        status: 'rejected',
+        dispatchedAt: new Date()
+      });
+    }
+
+    await request.save();
+
+    // Clear active timer
+    dispatchService.cleanActiveTimer(request._id.toString());
+
+    // Emit request-expired to rejecting mechanic
+    const io = /** @type {any} */ (req).io || require('../sockets/socketHandler').getIo();
+    if (io) {
+      io.to(`mechanic:${mechanic._id.toString()}`).emit('request-expired', { requestId: request._id.toString() });
+      if (mechanic.userId) {
+        io.to(`user:${mechanic.userId.toString()}`).emit('request-expired', { requestId: request._id.toString() });
+      }
+    }
+
+    // Proceed to next nearest mechanic immediately
+    dispatchService.dispatchNext(request._id.toString(), io).catch(err => {
+      console.error('[Dispatch Reject Route dispatchNext Async Error]', err.message);
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Request rejected successfully. Dispatching to next candidate.'
+    });
+  } catch (error) {
+    console.error('[Dispatch Reject Route Error]', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 module.exports = router;
 

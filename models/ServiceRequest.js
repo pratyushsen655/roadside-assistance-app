@@ -54,7 +54,14 @@ const ServiceRequestSchema = new mongoose.Schema({
     mechanicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Mechanic' },
     action: { type: String, enum: ['offered', 'accepted', 'rejected', 'timeout'] },
     timestamp: { type: Date, default: Date.now }
-  }]
+  }],
+  dispatchStatus: { type: String, enum: ['searching', 'assigned', 'unfulfilled'], default: 'searching' },
+  dispatchedMechanics: [{
+    mechanicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Mechanic' },
+    dispatchedAt: { type: Date, default: Date.now },
+    status: { type: String, enum: ['pending', 'rejected', 'timedout', 'accepted'] }
+  }],
+  currentCandidateMechanic: { type: mongoose.Schema.Types.ObjectId, ref: 'Mechanic', default: null }
 }, { timestamps: true });
 ServiceRequestSchema.index({ customerLocation: '2dsphere' });
 
