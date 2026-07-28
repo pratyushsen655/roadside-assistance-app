@@ -22,15 +22,30 @@ exports.createRequest = async (req, res, next) => {
     vehicleType,
     vehicleModel,
     issueDescription,
+    description,
     imageUrl,
     latitude,
     longitude,
+    location,
+    customerLocation,
     customerAddress,
     bookingType,
     scheduledTime
   } = req.body;
 
-  if (!vehicleType || !issueDescription || !latitude || !longitude) {
+  const finalIssueDescription = issueDescription || description || req.body.serviceType || 'Roadside assistance requested';
+  let finalLat = latitude;
+  let finalLng = longitude;
+
+  if (finalLat === undefined || finalLng === undefined) {
+    const locObj = customerLocation || location;
+    if (locObj && locObj.coordinates && Array.isArray(locObj.coordinates) && locObj.coordinates.length >= 2) {
+      finalLng = locObj.coordinates[0];
+      finalLat = locObj.coordinates[1];
+    }
+  }
+
+  if (!vehicleType || !finalIssueDescription || finalLat === undefined || finalLng === undefined) {
     return res.status(400).json({
       success: false,
       message: 'Please provide vehicle type, description, and location coordinates.'
@@ -49,7 +64,7 @@ exports.createRequest = async (req, res, next) => {
 
     // 1. Calculate pricing estimate
     // Look up count of online mechanics vs requests to evaluate surge modifier
-    const onlineMechCount = await Mechanic.countDocuments({ status: 'online' });
+    const onlineMechCount = await Mechanic.countDocuments({ $or: [{ status: 'online' }, { isOnline: true }] });
     const pendingReqCount = await ServiceRequest.countDocuments({ status: 'pending' });
     
     // For estimate, assume distance is 0 initially (or estimate from nearest mechanic)
@@ -57,8 +72,7 @@ exports.createRequest = async (req, res, next) => {
     
     // Find closest mechanic to get a realistic distance estimate
     const closestMechanic = await Mechanic.findOne({
-      status: 'online',
-      vehicleSpecializations: vehicleType,
+      $or: [{ status: 'online' }, { isOnline: true }],
       location: {
         $nearSphere: {
           $geometry: { type: 'Point', coordinates: [longitude, latitude] }
@@ -106,24 +120,47 @@ exports.createRequest = async (req, res, next) => {
 
     // 4. Trigger Real-time broadcasts if booking is INSTANT
     if (serviceRequest.bookingType === 'instant') {
-      // Find matches using AI scoring service — hard 4 km radius (same as feed endpoint)
-      const optimalMatches = await aiService.findOptimalMechanics(serviceRequest, 4);
-      
-      // Get all fcmTokens and socketIds of mechanics
+      const payload = {
+        requestId: serviceRequest._id,
+        _id: serviceRequest._id,
+        serviceType: serviceRequest.vehicleType,
+        issueType: serviceRequest.issueDescription,
+        vehicleType: serviceRequest.vehicleType,
+        vehicleModel: serviceRequest.vehicleModel,
+        issueDescription: serviceRequest.issueDescription,
+        distanceKm: estimateDistance,
+        price: serviceRequest.pricing ? serviceRequest.pricing.totalAmount : 150,
+        estimatedFare: serviceRequest.pricing ? serviceRequest.pricing.totalAmount : 150,
+        customerAddress: serviceRequest.customerAddress,
+        location: serviceRequest.customerAddress || 'Customer Location',
+        customerLocation: { latitude, longitude }
+      };
+
+      console.log(`[TRACE Step 1] [Request Created] Request ID: ${serviceRequest._id} | Vehicle: ${vehicleType} | Customer Coords: [Long: ${longitude}, Lat: ${latitude}]`);
+      console.log(`[TRACE Step 1 Payload]`, JSON.stringify(payload));
+
+      // Broadcast to ALL mechanics
+      if (socketHandler.getIo()) {
+        console.log(`[TRACE Step 2 Global] Emitting incoming-request / new_breakdown_request to global rooms`);
+        socketHandler.getIo().emit('incoming-request', payload);
+        socketHandler.getIo().emit('incoming_request', payload);
+        socketHandler.getIo().emit('new_breakdown_request', payload);
+        socketHandler.getIo().to('mechanics').emit('new_request_available', payload);
+      }
+
+      // Find matches using AI scoring service
+      const optimalMatches = await aiService.findOptimalMechanics(serviceRequest, 25);
+      console.log(`[TRACE Step 1 Matched Mechanics List] Matched Count: ${optimalMatches.length}`);
+      optimalMatches.forEach((m, idx) => {
+        const mech = m.mechanic;
+        console.log(`  [Match #${idx + 1}] ID: ${mech._id} | Name: ${mech.name} | Status: "${mech.status}" | isOnline: ${mech.isOnline} | Distance: ${m.distanceKm} km | Location: [${mech.location?.coordinates?.join(', ')}] | ActiveReqId: ${mech.activeRequestId || 'null'}`);
+      });
+
       const mechanicTokens = [];
-      
+
       optimalMatches.forEach(match => {
         const mechId = match.mechanic._id.toString();
-        // Emit Socket event to online matches
-        socketHandler.sendToMechanic(mechId, 'new_breakdown_request', {
-          requestId: serviceRequest._id,
-          vehicleType: serviceRequest.vehicleType,
-          vehicleModel: serviceRequest.vehicleModel,
-          issueDescription: serviceRequest.issueDescription,
-          distanceKm: match.distanceKm,
-          estimatedFare: serviceRequest.pricing.totalAmount,
-          customerLocation: { latitude, longitude }
-        });
+        socketHandler.sendToMechanic(mechId, 'new_breakdown_request', payload);
 
         if (match.mechanic.fcmToken) {
           mechanicTokens.push(match.mechanic.fcmToken);
@@ -152,6 +189,7 @@ exports.createRequest = async (req, res, next) => {
     res.status(201).json({
       success: true,
       data: serviceRequest,
+      request: serviceRequest,
       message: serviceRequest.bookingType === 'instant' 
         ? 'Request created. Pinging nearby mechanics.'
         : 'Request scheduled successfully.'
@@ -203,30 +241,39 @@ exports.getActiveRequest = async (req, res, next) => {
 exports.getNearbyRequests = async (req, res, next) => {
   try {
     const mechanic = await Mechanic.findById(req.user.id);
-    if (!mechanic || mechanic.status !== 'online') {
-      return res.status(400).json({ success: false, message: 'Mechanic must be online to fetch requests feed.' });
+    if (!mechanic) {
+      return res.status(404).json({ success: false, message: 'Mechanic not found.' });
     }
 
-    const [lon, lat] = mechanic.location.coordinates;
-
-    // Fetch requests: pending, vehicle type matches specialization, not rejected by this mechanic, within 10km
-    const requests = await ServiceRequest.find({
+    const query = {
       status: 'pending',
-      bookingType: 'instant',
-      vehicleType: { $in: mechanic.vehicleSpecializations },
-      rejectedBy: { $ne: mechanic._id },
-      customerLocation: {
+      rejectedBy: { $ne: mechanic._id }
+    };
+
+    const hasValidCoords = mechanic.location?.coordinates && 
+      (mechanic.location.coordinates[0] !== 0 || mechanic.location.coordinates[1] !== 0);
+
+    if (hasValidCoords) {
+      const [lon, lat] = mechanic.location.coordinates;
+      query.customerLocation = {
         $nearSphere: {
           $geometry: { type: 'Point', coordinates: [lon, lat] },
-          $maxDistance: 10000 // 10km
+          $maxDistance: (mechanic.serviceRadius || 50) * 1000
         }
-      }
-    }).populate('customer', 'name avatar');
+      };
+    }
 
-    // Calculate distances for feed mapping
+    const requests = await ServiceRequest.find(query)
+      .populate('customer', 'name phone avatar')
+      .sort({ createdAt: -1 });
+
     const formattedRequests = requests.map(reqDoc => {
-      const [cLon, cLat] = reqDoc.customerLocation.coordinates;
-      const distanceKm = parseFloat(mapService.calculateHaversineDistance(lat, lon, cLat, cLon).toFixed(2));
+      let distanceKm = 1.5;
+      if (hasValidCoords && reqDoc.customerLocation?.coordinates) {
+        const [lon, lat] = mechanic.location.coordinates;
+        const [cLon, cLat] = reqDoc.customerLocation.coordinates;
+        distanceKm = parseFloat(mapService.calculateHaversineDistance(lat, lon, cLat, cLon).toFixed(2));
+      }
       return {
         ...reqDoc.toObject(),
         distanceKm

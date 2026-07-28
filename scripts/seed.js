@@ -57,7 +57,7 @@ async function createMechanics() {
       ...m,
       role: undefined,
       vehicleSpecializations: ['car', 'bike'],
-      kyc: { status: 'approved', docType: 'driver_license', docUrl: '', rejectionReason: '' },
+      kyc: { status: 'approved', docType: 'aadhaar', docUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80', rejectionReason: '' },
       location: { type: 'Point', coordinates: randomCoord(baseLat, baseLng) },
       status: 'online',
     }))

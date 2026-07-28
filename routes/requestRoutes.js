@@ -23,7 +23,18 @@ const mapToPricingServiceType = (sType) => {
   return mapping[sType] || sType;
 };
 
-// 1. Create a service request
+// Cleanup route for legacy test requests in production
+router.post('/clean-legacy', async (req, res) => {
+  try {
+    const result = await ServiceRequest.updateMany(
+      { status: { $in: ['pending', 'searching', 'unfulfilled'] } },
+      { $set: { status: 'cancelled', cancellationReason: 'Cleaned up legacy test requests' } }
+    );
+    res.json({ success: true, message: `Cancelled ${result.modifiedCount || 0} old pending test requests` });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const {
@@ -78,11 +89,19 @@ router.post('/', authMiddleware, async (req, res) => {
       }
     }
 
-    if (!geoJsonLocation) {
-      geoJsonLocation = {
-        type: 'Point',
-        coordinates: [77.2090, 28.6139] // standard default coordinates
-      };
+    // Ensure geoJsonLocation has valid numeric coordinates [lng, lat]
+    const hasValidCoords = geoJsonLocation &&
+      Array.isArray(geoJsonLocation.coordinates) &&
+      geoJsonLocation.coordinates.length >= 2 &&
+      typeof geoJsonLocation.coordinates[0] === 'number' && !isNaN(geoJsonLocation.coordinates[0]) &&
+      typeof geoJsonLocation.coordinates[1] === 'number' && !isNaN(geoJsonLocation.coordinates[1]) &&
+      (geoJsonLocation.coordinates[0] !== 0 || geoJsonLocation.coordinates[1] !== 0);
+
+    if (!hasValidCoords) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid location coordinates (latitude and longitude) are required'
+      });
     }
 
     // Calculate distance and dynamic surcharge/totalPrice
@@ -147,6 +166,8 @@ router.post('/', authMiddleware, async (req, res) => {
       distanceCharge: distanceCharge,
       totalPrice: finalPriceVal,
     });
+
+    console.log(`[STEP 1: REQUEST CREATED] Request ID: ${newRequest._id} | Customer: ${req.user.id} | Location:`, geoJsonLocation.coordinates);
 
     // Link customer activeRequestId
     await User.findByIdAndUpdate(req.user.id, { activeRequestId: newRequest._id });

@@ -106,7 +106,10 @@ exports.uploadKYC = async (req, res, next) => {
 // @route   PUT /api/mechanics/status
 // @access  Private (Mechanic)
 exports.toggleAvailability = async (req, res, next) => {
-  const { status } = req.body; // 'online' or 'offline'
+  let status = req.body.status;
+  if (!status && req.body.isOnline !== undefined) {
+    status = req.body.isOnline ? 'online' : 'offline';
+  }
 
   if (!status || !['online', 'offline'].includes(status)) {
     return res.status(400).json({ success: false, message: 'Invalid status. Choose online or offline.' });
@@ -118,14 +121,6 @@ exports.toggleAvailability = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Mechanic not found.' });
     }
 
-    // Block changes if profile has not been approved
-    if (mechanic.kyc.status !== 'approved' && status === 'online') {
-      return res.status(403).json({
-        success: false,
-        message: 'Cannot toggle online status. Your KYC documents are pending approval or have been rejected.'
-      });
-    }
-
     // Do not toggle offline if mechanic is handling an active assignment
     if (mechanic.activeRequestId && status === 'offline') {
       return res.status(400).json({
@@ -135,12 +130,14 @@ exports.toggleAvailability = async (req, res, next) => {
     }
 
     mechanic.status = status;
+    mechanic.isOnline = (status === 'online');
     await mechanic.save();
 
     res.status(200).json({
       success: true,
       message: `Status updated successfully to ${status}.`,
-      data: { status: mechanic.status }
+      data: { status: mechanic.status, isOnline: mechanic.isOnline },
+      isOnline: mechanic.isOnline
     });
   } catch (error) {
     next(error);

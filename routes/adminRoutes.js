@@ -280,10 +280,11 @@ router.get('/mechanics', async (req, res) => {
         bio: mech.bio || '',
         experience: mech.experience || 0,
         vehicleSpecializations: mech.vehicleSpecializations || [],
+        documents: mech.documents || {},
         kyc: {
-          status: mech.kyc?.status || 'pending',
-          docType: mech.kyc?.docType || '',
-          docUrl: mech.kyc?.docUrl || '',
+          status: mech.kyc?.status || (mech.kyc?.docUrl || mech.documents?.identityProof || mech.documents?.licenseImage ? 'pending' : 'unsubmitted'),
+          docType: mech.kyc?.docType || (mech.documents?.identityProof ? 'Identity Proof' : mech.documents?.licenseImage ? 'Driving License' : ''),
+          docUrl: mech.kyc?.docUrl || mech.documents?.identityProof || mech.documents?.licenseImage || (mech.documents?.certificationImages && mech.documents.certificationImages[0]) || '',
           rejectionReason: mech.kyc?.rejectionReason || '',
         },
         history: mappedHistory
@@ -332,15 +333,11 @@ router.put('/mechanics/:id/block', async (req, res) => {
 });
 
 // PUT /api/admin/mechanics/:id/kyc
-// Body: { action: 'approve' | 'reject', rejectionReason?: string }
+// Body: { action: 'approve' | 'reject' | 'attach', docUrl?: string, docType?: string, rejectionReason?: string }
 router.put('/mechanics/:id/kyc', async (req, res) => {
   try {
     const Mechanic = require('../models/Mechanic');
-    const { action, rejectionReason } = req.body;
-
-    if (!['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ success: false, message: "action must be 'approve' or 'reject'" });
-    }
+    const { action, docUrl, docType, status, rejectionReason } = req.body;
 
     const mechanic = await Mechanic.findById(req.params.id);
     if (!mechanic) {
@@ -351,17 +348,25 @@ router.put('/mechanics/:id/kyc', async (req, res) => {
       mechanic.kyc = {};
     }
 
-    if (action === 'approve') {
+    if (docUrl || action === 'attach') {
+      mechanic.kyc.docUrl = docUrl || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80';
+      mechanic.kyc.docType = docType || 'Aadhaar Card';
+      mechanic.kyc.status = status || 'pending';
+      mechanic.kyc.rejectionReason = '';
+      if (status === 'approved' || action === 'approve') mechanic.isVerified = true;
+    } else if (action === 'approve') {
       mechanic.kyc.status = 'approved';
       mechanic.kyc.rejectionReason = '';
       mechanic.isVerified = true;          // approving KYC also verifies the mechanic
-    } else {
+    } else if (action === 'reject') {
       if (!rejectionReason || !rejectionReason.trim()) {
         return res.status(400).json({ success: false, message: 'rejectionReason is required when rejecting.' });
       }
       mechanic.kyc.status = 'rejected';
       mechanic.kyc.rejectionReason = rejectionReason.trim();
       mechanic.isVerified = false;         // revoke verification on rejection
+    } else {
+      return res.status(400).json({ success: false, message: "action must be 'approve', 'reject', or 'attach'" });
     }
 
     await mechanic.save();
@@ -380,6 +385,8 @@ router.put('/mechanics/:id/kyc', async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
+
 
 // GET /api/admin/jobs
 router.get('/jobs', async (req, res) => {

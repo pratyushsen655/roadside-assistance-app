@@ -107,8 +107,8 @@ const mechanicSchema = new mongoose.Schema(
     kyc: {
       status: {
         type: String,
-        enum: ['pending', 'approved', 'rejected'],
-        default: 'pending',
+        enum: ['unsubmitted', 'pending', 'approved', 'rejected'],
+        default: 'unsubmitted',
       },
       docType: {
         type: String,

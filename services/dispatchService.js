@@ -30,38 +30,50 @@ const cleanActiveTimer = (serviceRequestId) => {
  * @param {string} [vehicleType] - The request's vehicle type
  */
 const findNearbyMechanics = async (customerLocation, radiusInMeters, excludeIds = [], vehicleType = null) => {
-  const coordinates = customerLocation.coordinates || customerLocation;
-  if (!coordinates || !Array.isArray(coordinates) || coordinates.length < 2) {
-    console.error('[Dispatch ERROR] Invalid customer coordinates:', coordinates);
-    return [];
-  }
-
-  const [lng, lat] = coordinates;
-  const defaultRadius = radiusInMeters || Number(process.env.DEFAULT_DISPATCH_RADIUS) || 10000;
+  const coordinates = customerLocation?.coordinates || customerLocation;
+  const defaultRadius = radiusInMeters || Number(process.env.DEFAULT_DISPATCH_RADIUS) || 50000; // 50km default radius
 
   const query = {
-    status: 'online',
-    _id: { $nin: excludeIds },
-    location: {
+    $or: [
+      { status: 'online' },
+      { isOnline: true }
+    ],
+    _id: { $nin: excludeIds }
+  };
+
+  if (coordinates && Array.isArray(coordinates) && coordinates.length >= 2 && (coordinates[0] !== 0 || coordinates[1] !== 0)) {
+    query.location = {
       $near: {
         $geometry: {
           type: 'Point',
-          coordinates: [lng, lat],
+          coordinates: [coordinates[0], coordinates[1]],
         },
         $maxDistance: defaultRadius,
       },
-    },
-  };
-
-  if (vehicleType) {
-    query.vehicleSpecializations = vehicleType;
+    };
   }
 
   try {
-    return await Mechanic.find(query);
+    const results = await Mechanic.find(query);
+    if (results.length > 0) return results;
+
+    // Fallback 1: search without geo $near
+    delete query.location;
+    const fallbackResults = await Mechanic.find(query);
+    if (fallbackResults.length > 0) return fallbackResults;
+
+    // Fallback 2: return any mechanics not yet excluded so request is never dropped silently
+    return await Mechanic.find({ _id: { $nin: excludeIds } });
   } catch (error) {
     console.error('[Dispatch ERROR] Failed to query nearby mechanics:', error.message);
-    return [];
+    try {
+      delete query.location;
+      const fallbackResults = await Mechanic.find(query);
+      if (fallbackResults.length > 0) return fallbackResults;
+      return await Mechanic.find({ _id: { $nin: excludeIds } });
+    } catch (e) {
+      return [];
+    }
   }
 };
 
@@ -120,8 +132,10 @@ const dispatchNext = async (serviceRequestId, io = null) => {
       .filter(dm => ['rejected', 'timedout', 'accepted'].includes(dm.status))
       .map(dm => dm.mechanicId.toString());
 
-    const radiusInMeters = Number(process.env.DEFAULT_DISPATCH_RADIUS) || 10000;
+    const radiusInMeters = Number(process.env.DEFAULT_DISPATCH_RADIUS) || 50000;
     const candidates = await findNearbyMechanics(request.customerLocation, radiusInMeters, excludeIds, request.vehicleType);
+
+    console.log(`[STEP 2: MECHANICS MATCHED] Matched ${candidates.length} online & available mechanics for request ${request._id}:`, candidates.map(m => ({ id: m._id.toString(), name: m.name, phone: m.phone, isOnline: m.isOnline, status: m.status })));
 
     // If no candidate online mechanics are found, request goes unfulfilled
     if (candidates.length === 0) {
@@ -182,6 +196,7 @@ const dispatchNext = async (serviceRequestId, io = null) => {
 
     const fcmPayload = {
       requestId: request._id.toString(),
+      screen: 'IncomingRequest',
       customerName,
       customerLocation: JSON.stringify({
         latitude: request.customerLocation.coordinates[1],
@@ -195,12 +210,19 @@ const dispatchNext = async (serviceRequestId, io = null) => {
       timestamp: new Date().toISOString(),
     };
 
-    // Emit Socket.io events
+    // Emit Socket.io events (emit both hyphenated and underscore naming conventions)
     if (ioInstance) {
+      console.log(`[STEP 3: SOCKET EMITTED] Emitting incoming-request & incoming_request for request ${request._id} to room mechanic:${candidate._id.toString()} and user:${candidate.userId || 'N/A'}`);
       ioInstance.to(`mechanic:${candidate._id.toString()}`).emit('incoming-request', socketPayload);
+      ioInstance.to(`mechanic:${candidate._id.toString()}`).emit('incoming_request', socketPayload);
       if (candidate.userId) {
         ioInstance.to(`user:${candidate.userId.toString()}`).emit('incoming-request', socketPayload);
+        ioInstance.to(`user:${candidate.userId.toString()}`).emit('incoming_request', socketPayload);
       }
+      ioInstance.to('mechanics').emit('incoming-request', socketPayload);
+      ioInstance.to('mechanics').emit('incoming_request', socketPayload);
+      ioInstance.to('mechanics').emit('new_request_available', socketPayload);
+      ioInstance.to('mechanics').emit('new:job:request', socketPayload);
     }
 
     // Send high-priority FCM Push Notification

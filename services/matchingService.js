@@ -48,8 +48,7 @@ const expandSearchRadius = async (request, io) => {
     const [cLng, cLat] = request.customerLocation.coordinates;
 
     const nearby = await Mechanic.find({
-      status: 'online',
-      'kyc.status': { $ne: 'pending' },
+      $or: [{ status: 'online' }, { isOnline: true }],
       location: {
         $near: {
           $geometry: { type: 'Point', coordinates: [cLng, cLat] },
@@ -147,6 +146,7 @@ const dispatchNextMechanic = async (request, io) => {
   // Prepare FCM Payload (Must be string fields only)
   const fcmPayload = {
     requestId: request._id.toString(),
+    screen: 'IncomingRequest',
     customerName: customerName,
     customerLocation: JSON.stringify({ latitude: cLat, longitude: cLng }),
     customerAddress: request.customerAddress || 'Nearby Coordinates',
@@ -182,11 +182,17 @@ const dispatchNextMechanic = async (request, io) => {
     if (mechanic.userId) {
       const userRoom = `user:${mechanic.userId.toString()}`;
       io.to(userRoom).emit('incoming_request', socketPayload);
+      io.to(userRoom).emit('incoming-request', socketPayload);
+      io.to(userRoom).emit('new_breakdown_request', socketPayload);
     }
 
     // Also emit to mechanic room
     const mechanicRoom = `mechanic:${mechanic._id.toString()}`;
     io.to(mechanicRoom).emit('incoming_request', socketPayload);
+    io.to(mechanicRoom).emit('incoming-request', socketPayload);
+    io.to(mechanicRoom).emit('new_breakdown_request', socketPayload);
+    io.to('mechanics').emit('incoming_request', socketPayload);
+    io.to('mechanics').emit('incoming-request', socketPayload);
   }
 
   // 3. Schedule 30-Second Timeout Auto-Reassignment
@@ -245,8 +251,7 @@ const startMatchingProcess = async (request, io, radiusKm = 5) => {
 
   // Query MongoDB for online mechanics using 2dsphere near proximity index
   const nearbyMechanics = await Mechanic.find({
-    status: 'online',
-    'kyc.status': { $ne: 'pending' },
+    $or: [{ status: 'online' }, { isOnline: true }],
     location: {
       $near: {
         $geometry: {

@@ -1,5 +1,6 @@
 const express = require('express');
 const authMiddleware = require('../middleware/authMiddleware');
+const { pollingRateLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
@@ -52,27 +53,17 @@ router.get('/requests/pending', authMiddleware, async (req, res) => {
 
     const mechanic = await Mechanic.findOne({ $or: [{ _id: req.user.id }, { userId: req.user.id }] });
 
-    if (!mechanic || !mechanic.isOnline) {
+    if (!mechanic) {
       return res.status(200).json([]);
     }
 
     const [mLng, mLat] = mechanic.location?.coordinates || [0, 0];
 
-    // Guard: if mechanic has no valid location stored yet, return empty feed
-    if (mLng === 0 && mLat === 0) {
-      console.warn(`[NearbyRequests] Mechanic ${mechanic._id} has no location set — returning empty feed`);
-      return res.status(200).json([]);
-    }
-
-    // Retrieve all pending requests not rejected by this mechanic and offered to them or to no one
+    // Retrieve active pending/searching requests not rejected by this mechanic
     const rawRequests = await ServiceRequest.find({
-      status: 'pending',
-      rejectedBy: { $ne: mechanic._id },
-      $or: [
-        { currentNotifiedMechanic: mechanic._id },
-        { currentNotifiedMechanic: null }
-      ]
-    }).populate('customer', 'name phone');
+      status: { $in: ['pending', 'searching', 'unfulfilled'] },
+      rejectedBy: { $ne: mechanic._id }
+    }).populate('customer', 'name phone').sort({ createdAt: -1 });
 
     const items = rawRequests.map(reqItem => {
       const coords = reqItem.customerLocation?.coordinates;
@@ -81,6 +72,14 @@ router.get('/requests/pending', authMiddleware, async (req, res) => {
       
       let distanceKm = null;
       let coordsMissing = false;
+
+      if (mLng === 0 && mLat === 0) {
+        coordsMissing = true;
+      } else if (cLng === 0 && cLat === 0) {
+        coordsMissing = true;
+      } else {
+        distanceKm = parseFloat(calculateHaversineDistance(mLat, mLng, cLat, cLng).toFixed(1));
+      }
 
       console.log(`[NearbyRequests DEBUG] reqItem: ${reqItem._id}, mechanic: ${mechanic._id}`);
       console.log(`[NearbyRequests DEBUG] mLng: ${mLng}, mLat: ${mLat}`);
@@ -94,14 +93,9 @@ router.get('/requests/pending', authMiddleware, async (req, res) => {
         console.log(`[NearbyRequests DEBUG] Calculated distanceKm: ${distanceKm}`);
       }
 
-      // Calculate elapsed time in seconds to determine active search radius
-      const elapsedSeconds = (Date.now() - new Date(reqItem.createdAt).getTime()) / 1000;
-      let activeRadiusKm = 5;
-      if (elapsedSeconds >= 120) {
-        activeRadiusKm = 15;
-      } else if (elapsedSeconds >= 60) {
-        activeRadiusKm = 10;
-      }
+      // Determine active search radius (mechanic serviceRadius or default 50km)
+      const serviceRadius = mechanic.serviceRadius || 50;
+      let activeRadiusKm = serviceRadius;
 
       return {
         reqItem,
@@ -110,8 +104,8 @@ router.get('/requests/pending', authMiddleware, async (req, res) => {
         activeRadiusKm
       };
     })
-    // Filter to requests that are within the current search radius or have coordinates missing (so we can show the fallback UI)
-    .filter(item => item.coordsMissing || item.distanceKm <= item.activeRadiusKm)
+    // Filter to requests that are within the search radius or have coordinates missing
+    .filter(item => item.coordsMissing || item.distanceKm === null || item.distanceKm <= item.activeRadiusKm)
     // Sort by distance (nearest first), pushing coordinate-missing requests to the bottom
     .sort((a, b) => {
       if (a.coordsMissing && b.coordsMissing) return 0;
@@ -298,26 +292,101 @@ router.put('/requests/:id/reject', authMiddleware, async (req, res) => {
   }
 });
 
+// PUT /api/mechanic/location
+router.put('/location', authMiddleware, async (req, res) => {
+  try {
+    const Mechanic = require('../models/Mechanic');
+    const { latitude, longitude } = req.body;
+
+    if (latitude === undefined || longitude === undefined) {
+      return res.status(400).json({ success: false, message: 'Latitude and longitude are required' });
+    }
+
+    const mechanic = await Mechanic.findOneAndUpdate(
+      { $or: [{ _id: req.user.id }, { userId: req.user.id }] },
+      {
+        location: {
+          type: 'Point',
+          coordinates: [Number(longitude), Number(latitude)]
+        }
+      },
+      { new: true }
+    );
+
+    if (!mechanic) {
+      return res.status(404).json({ success: false, message: 'Mechanic not found' });
+    }
+
+    console.log(`[LOCATION_SYNC] Updated location for mechanic ${mechanic._id}: [${longitude}, ${latitude}]`);
+    res.status(200).json({ success: true, mechanic });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // PUT /api/mechanic/status
 router.put('/status', authMiddleware, async (req, res) => {
   try {
     const Mechanic = require('../models/Mechanic');
-    const { isOnline } = req.body;
+    const { isOnline, latitude, longitude } = req.body;
     const statusVal = isOnline ? 'online' : 'offline';
+
+    const updateObj = { isOnline: !!isOnline, status: statusVal };
+    if (latitude !== undefined && longitude !== undefined) {
+      updateObj.location = {
+        type: 'Point',
+        coordinates: [Number(longitude), Number(latitude)]
+      };
+    }
 
     const mechanic = await Mechanic.findOneAndUpdate(
       { $or: [{ _id: req.user.id }, { userId: req.user.id }] },
-      { isOnline: !!isOnline, status: statusVal },
+      { $set: updateObj },
       { new: true }
     );
     if (!mechanic) {
       return res.status(404).json({ success: false, message: 'Mechanic not found' });
     }
-    res.status(200).json({ success: true, isOnline: mechanic.isOnline, status: mechanic.status });
+    console.log(`[TRACE Step 1 Server Status Toggle] Mechanic ${mechanic._id} (${mechanic.name}) status updated to isOnline: ${mechanic.isOnline}, status: ${mechanic.status}, location:`, mechanic.location);
+    res.status(200).json({ success: true, isOnline: mechanic.isOnline, status: mechanic.status, mechanic });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
+// PATCH /api/mechanics/:id/status (and PATCH /api/mechanic/status)
+const handlePatchStatus = async (req, res) => {
+  try {
+    const Mechanic = require('../models/Mechanic');
+    const { isOnline, status, latitude, longitude } = req.body;
+    const isOnlineVal = isOnline !== undefined ? !!isOnline : (status === 'online');
+    const statusVal = status || (isOnlineVal ? 'online' : 'offline');
+
+    const updateObj = { isOnline: isOnlineVal, status: statusVal };
+    if (latitude !== undefined && longitude !== undefined) {
+      updateObj.location = {
+        type: 'Point',
+        coordinates: [Number(longitude), Number(latitude)]
+      };
+    }
+
+    const targetId = req.params.id || req.user.id;
+    const mechanic = await Mechanic.findOneAndUpdate(
+      { $or: [{ _id: targetId }, { userId: targetId }] },
+      { $set: updateObj },
+      { new: true }
+    );
+    if (!mechanic) {
+      return res.status(404).json({ success: false, message: 'Mechanic not found' });
+    }
+    console.log(`[STATUS_SYNC PATCH] Mechanic ${mechanic._id} status updated to isOnline: ${mechanic.isOnline}, status: ${mechanic.status}`);
+    res.status(200).json({ success: true, isOnline: mechanic.isOnline, status: mechanic.status, mechanic });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+router.patch('/status', authMiddleware, handlePatchStatus);
+router.patch('/:id/status', authMiddleware, handlePatchStatus);
 
 // GET /api/mechanic/jobs
 router.get('/jobs', authMiddleware, async (req, res) => {
@@ -401,15 +470,160 @@ router.get('/earnings', authMiddleware, async (req, res) => {
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
     const Mechanic = require('../models/Mechanic');
-    const mechanic = await Mechanic.findOne({ $or: [{ _id: req.user.id }, { userId: req.user.id }] });
+    const mechanic = await Mechanic.findOne({ $or: [{ _id: req.user.id }, { userId: req.user.id }] }).lean();
     if (!mechanic) {
       return res.status(404).json({ success: false, message: 'Mechanic not found' });
+    }
+    // Normalize KYC object for clean frontend consumption
+    if (!mechanic.kyc || !mechanic.kyc.docUrl) {
+      mechanic.kyc = {
+        status: 'unsubmitted',
+        docType: mechanic.kyc?.docType || '',
+        docUrl: '',
+        rejectionReason: mechanic.kyc?.rejectionReason || ''
+      };
     }
     res.status(200).json({ success: true, mechanic });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
+
+// POST /api/mechanic/kyc/upload
+const multer = require('multer');
+const { uploadKycDocument } = require('../services/kycStorageService');
+const { validateKycDocument } = require('../utils/documentValidator');
+const KycAuditLog = require('../models/KycAuditLog');
+
+const kycUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+  fileFilter: (req, file, cb) => {
+    const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
+    if (allowedMimeTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPG, PNG, WEBP images and PDF files up to 5MB are allowed.'));
+    }
+  }
+}).single('document');
+
+router.post('/kyc/upload', authMiddleware, (req, res) => {
+  kycUpload(req, res, async (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ success: false, error: 'File size exceeds 5MB limit.', message: 'File size exceeds 5MB limit.' });
+      }
+      return res.status(400).json({ success: false, error: err.message || 'File upload error.', message: err.message || 'File upload error.' });
+    }
+
+    try {
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ success: false, error: 'No document file provided.', message: 'No document file provided.' });
+      }
+
+      const { docType } = req.body;
+      if (!docType || !docType.trim()) {
+        return res.status(400).json({ success: false, error: 'Document type (docType) is required.', message: 'Document type (docType) is required.' });
+      }
+
+      const Mechanic = require('../models/Mechanic');
+      const mechanic = await Mechanic.findOne({ $or: [{ _id: req.user.id }, { userId: req.user.id }] });
+
+      if (!mechanic) {
+        return res.status(404).json({ success: false, error: 'Mechanic profile not found.', message: 'Mechanic profile not found.' });
+      }
+
+      // --- DOCUMENT CLASSIFICATION & VALIDATION STEP ---
+      const validation = await validateKycDocument(file.buffer, file.mimetype, docType.trim());
+
+      if (!validation.isValid) {
+        console.warn(`[KYC Upload Rejected] Mechanic ${mechanic._id}: ${validation.reason}`);
+
+        // Log rejected upload attempt server-side
+        try {
+          await KycAuditLog.create({
+            mechanic: mechanic._id,
+            docType: docType.trim(),
+            status: 'rejected',
+            reason: validation.reason,
+            originalFileName: file.originalname || 'unknown',
+            mimeType: file.mimetype,
+            fileSizeBytes: file.size,
+            ipAddress: req.ip || ''
+          });
+        } catch (logErr) {
+          console.error('[KycAuditLog Error]', logErr.message);
+        }
+
+        // Keep status as 'not_submitted' / 'unsubmitted' and do NOT save image
+        if (!mechanic.kyc || !mechanic.kyc.docUrl) {
+          mechanic.kyc = {
+            status: 'unsubmitted',
+            docType: docType.trim(),
+            docUrl: '',
+            rejectionReason: validation.reason
+          };
+          await mechanic.save();
+        }
+
+        return res.status(400).json({
+          success: false,
+          error: 'Uploaded image does not appear to be a valid ID document. Please upload a clear photo of your Aadhaar, PAN, or driving license.',
+          message: 'Uploaded image does not appear to be a valid ID document. Please upload a clear photo of your Aadhaar, PAN, or driving license.',
+          reason: validation.reason,
+          kycStatus: 'not_submitted'
+        });
+      }
+
+      // --- AUTO-CHECK PASSED: Save file to Storage and set status to 'pending' ---
+      const docUrl = await uploadKycDocument(
+        file.buffer,
+        mechanic._id.toString(),
+        file.originalname,
+        file.mimetype
+      );
+
+      mechanic.kyc = {
+        status: 'pending', // Only move to pending_review if auto-check passes!
+        docType: docType.trim(),
+        docUrl: docUrl,
+        rejectionReason: ''
+      };
+
+      await mechanic.save();
+
+      // Log accepted attempt server-side
+      try {
+        await KycAuditLog.create({
+          mechanic: mechanic._id,
+          docType: docType.trim(),
+          status: 'accepted',
+          reason: validation.reason,
+          originalFileName: file.originalname || 'unknown',
+          mimeType: file.mimetype,
+          fileSizeBytes: file.size,
+          ipAddress: req.ip || ''
+        });
+      } catch (logErr) {
+        console.error('[KycAuditLog Error]', logErr.message);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'KYC document uploaded successfully. Status updated to pending review.',
+        kyc: mechanic.kyc
+      });
+    } catch (uploadError) {
+      console.error('[KYC Upload Error]', uploadError);
+      return res.status(500).json({ success: false, error: uploadError.message || 'Failed to process KYC document.', message: uploadError.message || 'Failed to process KYC document.' });
+    }
+  });
+});
+
+
 
 // PUT /api/mechanic/profile
 router.put('/profile', authMiddleware, async (req, res) => {

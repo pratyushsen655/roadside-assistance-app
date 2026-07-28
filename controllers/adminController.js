@@ -183,12 +183,30 @@ exports.verifyKYC = async (req, res, next) => {
 // @access  Private (Admin Only)
 exports.getMechanics = async (req, res, next) => {
   try {
-    const list = await Mechanic.find({}).sort({ createdAt: -1 });
-    res.status(200).json({ success: true, count: list.length, data: list });
+    const list = await Mechanic.find({}).sort({ createdAt: -1 }).lean();
+    const normalized = list.map(m => {
+      const docs = m.documents || {};
+      const legacyDoc = docs.identityProof || docs.licenseImage || (docs.certificationImages && docs.certificationImages[0]) || '';
+      const docUrl = m.kyc?.docUrl || legacyDoc || '';
+      const docType = m.kyc?.docType || (docs.identityProof ? 'Identity Proof' : docs.licenseImage ? 'Driving License' : legacyDoc ? 'Registration Document' : '');
+      const status = m.kyc?.status || (docUrl ? 'pending' : 'unsubmitted');
+
+      return {
+        ...m,
+        kyc: {
+          status,
+          docType,
+          docUrl,
+          rejectionReason: m.kyc?.rejectionReason || ''
+        }
+      };
+    });
+    res.status(200).json({ success: true, count: normalized.length, data: normalized });
   } catch (error) {
     next(error);
   }
 };
+
 
 // @desc    List all customers
 // @route   GET /api/admin/customers

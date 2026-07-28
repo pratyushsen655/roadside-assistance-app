@@ -6,7 +6,17 @@ const socketHandler = {
   getIo: () => ioInstance,
   sendToMechanic: (mechanicId, event, data) => {
     if (ioInstance) {
-      ioInstance.to(`mechanic:${mechanicId}`).emit(event, data);
+      const roomName = `mechanic:${mechanicId}`;
+      const roomSockets = ioInstance.sockets.adapter.rooms.get(roomName);
+      const activeSocketsCount = roomSockets ? roomSockets.size : 0;
+      const socketIds = roomSockets ? Array.from(roomSockets) : [];
+
+      console.log(`[TRACE Step 2 & 3] [Backend Socket Emit & Room Check] Room: "${roomName}" | Active Sockets Count: ${activeSocketsCount} | Socket IDs: [${socketIds.join(', ')}] | Event: "${event}"`);
+      console.log(`[TRACE Step 2 Payload]`, JSON.stringify(data));
+
+      ioInstance.to(roomName).emit(event, data);
+    } else {
+      console.log(`[TRACE Step 2 ERROR] ioInstance is null when attempting to emit to mechanic:${mechanicId}`);
     }
   },
   sendToCustomer: (customerId, event, data) => {
@@ -24,7 +34,7 @@ const socketHandler = {
     ioInstance = io;
 
     io.on('connection', async (socket) => {
-      console.log(`[Socket] User connected: ${socket.id}`);
+      console.log(`[TRACE Step 4 Server] [Socket Connected] Socket ID: ${socket.id} | Timestamp: ${new Date().toISOString()}`);
 
       // Decode token if provided in handshake auth
       const token = socket.handshake.auth?.token;
@@ -34,18 +44,18 @@ const socketHandler = {
           const decoded = /** @type {any} */ (jwt.verify(token, JWT_SECRET));
           socket.userId = decoded.id;
           socket.join(`user:${decoded.id}`);
-          console.log(`[Socket] Customer/User joined room: user:${decoded.id} | Socket ID: ${socket.id}`);
+          console.log(`[TRACE Step 4 Server] [Room Join] Customer/User joined room: "user:${decoded.id}" | Socket ID: ${socket.id}`);
 
           const Mechanic = require('../models/Mechanic');
           const mechanic = await Mechanic.findOne({ $or: [{ _id: decoded.id }, { userId: decoded.id }] });
           if (mechanic) {
             socket.mechanicId = mechanic._id.toString();
             socket.join(`mechanic:${mechanic._id.toString()}`);
-            console.log(`[Socket] Mechanic joined room: mechanic:${mechanic._id.toString()} | Socket ID: ${socket.id}`);
-            console.log(`[Socket Room Confirm] Mechanic ID: ${mechanic._id.toString()} joined room: mechanic:${mechanic._id.toString()} and room: user:${decoded.id} | Socket ID: ${socket.id}`);
+            socket.join('mechanics');
+            console.log(`[TRACE Step 4 Server] [Room Join] Mechanic joined rooms: "mechanic:${mechanic._id.toString()}" & "mechanics" | Socket ID: ${socket.id}`);
           }
         } catch (err) {
-          console.log('[Socket] Handshake auth token verification failed:', err.message);
+          console.log('[TRACE Step 4 Server] Handshake auth token verification failed:', err.message);
         }
       }
 
@@ -53,6 +63,54 @@ const socketHandler = {
       socket.on('join:job:room', ({ jobId }) => {
         socket.join(`job:${jobId}`);
         console.log(`[Socket] Customer/User Socket joined room: job:${jobId} | Socket ID: ${socket.id}`);
+      });
+
+      // Join mechanic specific room
+      socket.on('join:mechanic:room', async (data) => {
+        let mechanicId = typeof data === 'string' ? data : (data?.mechanicId || data?.id);
+        if (mechanicId === 'null' || mechanicId === 'undefined' || mechanicId === '0') {
+          mechanicId = null;
+        }
+        if (!mechanicId && socket.userId) {
+          try {
+            const Mechanic = require('../models/Mechanic');
+            const mechanic = await Mechanic.findOne({ $or: [{ _id: socket.userId }, { userId: socket.userId }] });
+            if (mechanic) mechanicId = mechanic._id.toString();
+          } catch (err) {}
+        }
+        if (!mechanicId && socket.mechanicId) {
+          mechanicId = socket.mechanicId;
+        }
+        if (mechanicId && mechanicId !== 'null' && mechanicId !== 'undefined') {
+          socket.mechanicId = mechanicId;
+          const roomName = `mechanic:${mechanicId}`;
+          socket.join(roomName);
+          console.log(`[TRACE Step 3 Server Socket Joined Room] Socket ${socket.id} joined room: "${roomName}"`);
+        } else {
+          console.warn(`[Socket WARNING] Socket ${socket.id} attempted to join room with invalid/null mechanicId: ${JSON.stringify(data)}`);
+        }
+      });
+
+      socket.on('join:mechanic', async (data) => {
+        let mechanicId = typeof data === 'string' ? data : (data?.mechanicId || data?.id);
+        if (mechanicId === 'null' || mechanicId === 'undefined' || mechanicId === '0') {
+          mechanicId = null;
+        }
+        if (!mechanicId && socket.userId) {
+          try {
+            const Mechanic = require('../models/Mechanic');
+            const mechanic = await Mechanic.findOne({ $or: [{ _id: socket.userId }, { userId: socket.userId }] });
+            if (mechanic) mechanicId = mechanic._id.toString();
+          } catch (err) {}
+        }
+        if (mechanicId && mechanicId !== 'null' && mechanicId !== 'undefined') {
+          socket.mechanicId = mechanicId;
+          const roomName = `mechanic:${mechanicId}`;
+          socket.join(roomName);
+          console.log(`[TRACE Step 3 Server Socket Joined Room] Socket ${socket.id} joined room: "${roomName}"`);
+        } else {
+          console.warn(`[Socket WARNING] Socket ${socket.id} attempted to join room with invalid/null mechanicId: ${JSON.stringify(data)}`);
+        }
       });
 
       // Join mechanics room

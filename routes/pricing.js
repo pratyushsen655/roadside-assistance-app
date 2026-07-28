@@ -131,6 +131,13 @@ router.put('/:serviceType/:vehicleType', adminMiddleware, async (req, res) => {
       });
     }
 
+    if (Number(baseFare) < 0 || Number(perKmRate) < 0 || (minCharge !== undefined && Number(minCharge) < 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Pricing values (baseFare, perKmRate, minCharge) cannot be negative.'
+      });
+    }
+
     const updatedBy = req.user?.email || req.user?.id || 'admin';
     const config = await PricingConfig.findOneAndUpdate(
       { serviceType, vehicleType },
@@ -143,6 +150,18 @@ router.put('/:serviceType/:vehicleType', adminMiddleware, async (req, res) => {
       },
       { new: true, upsert: true, runValidators: true }
     );
+
+    // Emit real-time pricing:updated event to all connected clients
+    try {
+      const socketHandler = require('../sockets/socketHandler');
+      const io = req.io || socketHandler.getIo();
+      if (io) {
+        io.emit('pricing:updated', { serviceType, vehicleType, config });
+        console.log(`[Pricing Socket] Emitted pricing:updated for ${serviceType} / ${vehicleType}`);
+      }
+    } catch (socketErr) {
+      console.warn('[Pricing Socket Warning] Failed to emit pricing:updated event:', socketErr.message);
+    }
 
     res.status(200).json({
       success: true,

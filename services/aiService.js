@@ -18,23 +18,11 @@ const findOptimalMechanics = async (serviceRequest, maxRadiusKm = 4) => {
   const [custLon, custLat] = serviceRequest.customerLocation.coordinates;
   const vehicleType = serviceRequest.vehicleType; // 'car' or 'bike'
 
-  // 1. Fetch online mechanics within a 2dsphere proximity radius
-  // Exclude mechanics who already rejected this request
+  // 1. Fetch online mechanics within proximity radius
   const nearbyMechanics = await Mechanic.find({
-    status: 'online',
-    vehicleSpecializations: vehicleType,
+    $or: [{ status: 'online' }, { isOnline: true }],
     _id: { $nin: serviceRequest.rejectedBy || [] },
-    activeRequestId: null,
-    'kyc.status': { $ne: 'pending' }, // Only approved mechanics
-    location: {
-      $nearSphere: {
-        $geometry: {
-          type: 'Point',
-          coordinates: [custLon, custLat],
-        },
-        $maxDistance: maxRadiusKm * 1000, // in meters
-      },
-    },
+    activeRequestId: null
   });
 
   if (!nearbyMechanics || nearbyMechanics.length === 0) {
